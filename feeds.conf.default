@@ -1,9 +1,4 @@
-# miniupnpd 修复：immortalwrt/packages 的 dd29469（2026-10-16）升到 2.3.11 却留下
-# 2.3.9 的 020/030/040 旧补丁，打不上导致编译失败；上游 PR #2001 已给出修复但未合并。
-# 固定到该 PR 的 head 11ebc02d（naoki66/packages，父提交即当前 master 8d50d4ea）：
-# 保留 2.3.11，删除 020/030、刷新 040；PR 合并后改回 immortalwrt/packages 并去掉 ^commit。
-# 已存在的 feeds/packages 不会自动切到固定提交，需先 rm -rf feeds/packages 再 feeds update。
-src-git packages https://github.com/naoki66/packages.git^11ebc02d3914b5b3e05c964ac1d21f7e5b8cd6be
+src-git packages https://github.com/immortalwrt/packages.git
 src-git luci https://github.com/immortalwrt/luci.git
 src-git routing https://github.com/openwrt/routing.git
 src-git telephony https://github.com/openwrt/telephony.git
