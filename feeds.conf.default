@@ -4,7 +4,7 @@ src-git routing https://github.com/openwrt/routing.git
 src-git telephony https://github.com/openwrt/telephony.git
 src-git video https://github.com/openwrt/video.git
 # PON 两个 feed 指向本仓库 fork，内容与 pbs05 上游一致。
-# 固定 commit 保证构建可复现；升级 fork 时同步修改此处。
+# 未固定提交，跟随 fork 默认分支最新提交；需要可复现构建时在 URL 后加 ^commit。
 src-git pon_drivers https://github.com/DenzelVincent/openwrt-pon-drivers.git
 src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git
 # lucky 仓库根下是 lucky/ 与 luci-app-lucky/ 两个包目录，可直接作 feed；固定提交避免上游改动影响编译

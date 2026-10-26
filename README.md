@@ -30,15 +30,12 @@ PonWrt 是一个用于研究和开发的开源光猫固件项目。
 
 ## 编译
 
-> 本分支 `AN7581-GPON` 用于 AN7581 设备的 GPON 线路调试（XGS-PON 请用 `master`）。相对 `master` 的**代码改动只有内核 PCS patch 608**；另有 `feeds.conf.default` 的 PON feed 指向含 GPON 改造的 fork、新增 GPON 本地编译配置 `an7581-gpon.config`，以及文档与分支清理提交。
+> 本分支 `AN7581-GPON` 用于 AN7581 设备的 GPON 固件构建（XGS-PON 请用 `master`）。相对 `master` **没有代码改动**，分支差异只有：
 >
-> GPON 支持横跨三个来源，缺一 ONU 就无法注册：
+> - `an7581-gpon.config`：GPON 云编译产物 `.config` 的本地快照，云侧配置变更后需重新生成
+> - `feeds.conf.default`：PON 两个 feed 指向本仓库 fork，内容与 pbs05 上游一致，未固定提交
 >
-> | 来源 | 分支 | 内容 |
-> | --- | --- | --- |
-> | PonWrt | `AN7581-gpon` | 内核 patch `target/linux/airoha/patches-6.18/608-net-pcs-airoha-add-AN7581-PON-line-modes.patch`：GPON 写 `DIG_RESERVE_0=0x400` 并置 `FORCE_RX_RDY` |
-> | [openwrt-pon-drivers](https://github.com/DenzelVincent/openwrt-pon-drivers) | `main` | PON MAC 驱动：解锁 GPON `mac_supported`、数字 PHY RX 模式 `0x400`、响应时间 `0xAA2` |
-> | [openwrt-pon-userspace](https://github.com/DenzelVincent/openwrt-pon-userspace) | `main` | LuCI/用户态：PON 配置下拉增加 GPON 模式选项 |
+> 此前的 GPON 代码改造已于 2026-10-19 移除：内核 PCS patch 608 与 `master` 基线完全一致，PON 驱动/用户态也没有 GPON 专属修改。
 
 ```sh
 #  安装编译所需的工具链和库
@@ -62,10 +59,9 @@ git clone --depth 1 -b AN7581-GPON https://github.com/DenzelVincent/ponwrt.git
 cd ponwrt
 
 #  更新并安装 feeds（软件包源）
-#  本分支 feeds.conf.default 里 pon_drivers / pon_userspace 已指向含 GPON 改造的 fork，
-#  直接 update -a 即取到 GPON 代码；若这两行被改回上游 pbs05，编出的驱动仍是 XG-PON only
-#  注意：feed 用 ^commit 固定，已存在的目录不会被 update 切到新 pin；升级 fork 后
-#  先删掉对应 feeds/<name> 再 update（详见下文“修改代码后的增量编译”）
+#  本分支 feeds.conf.default 的 pon_drivers / pon_userspace 指向本仓库 fork，内容与 pbs05 上游一致
+#  这两行未固定提交，会跟随 fork 默认分支最新提交；需要可复现构建时在 URL 后加 ^commit
+#  已存在的 feed 目录不会被 update 切换到新提交，需要时先 rm -rf feeds/<name> 再 update
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
@@ -86,7 +82,6 @@ cp an7581-gpon.config .config
 
 #  开始编译
 # -j$(nproc) 表示用所有 CPU 核心并行编译，加快速度
-# 内核侧 GPON 改动（PCS/PMA 寄存器）在编译期打进内核，只单独重编 PON 软件包不会生效，需重编完整固件
 make defconfig
 make download -j8 V=s
 make -j$(nproc)
@@ -96,29 +91,23 @@ make -j$(nproc)
 
 ### 修改代码后的增量编译
 
-GPON 改动分布在三个位置，重建范围不同，不要每次都全量重编。
+本分支没有 GPON 专属代码改动，按上游常规方式增量编译即可。
 
-**内核补丁**（`target/linux/airoha/patches-6.18/608-net-pcs-airoha-add-AN7581-PON-line-modes.patch`）
+**内核补丁 / 内核配置**
 
 ```sh
-# hunk 行数错误会在编译后期才报 malformed patch，先本地校验（CRLF 同样会导致打不上）
-python3 tmp/hunk_check.py target/linux/airoha/patches-6.18/608-net-pcs-airoha-add-AN7581-PON-line-modes.patch
-
 make target/linux/clean
-make target/linux/prepare V=s          # 先确认补丁能重新打上
 make target/linux/compile -j$(nproc) V=s
-make -j$(nproc)                        # 重打固件镜像
+make -j$(nproc)                   # 重打固件镜像
 ```
 
 `target/linux/clean` 会删除当前目标的 `build_dir/target-*/linux-*`，强制重新解压并重打补丁；只做增量编译不会重新应用修改后的补丁。
 
-**PON 驱动 / 用户态 feed**
+**feed 软件包（PON 驱动 / 用户态）**
 
-feed 在 `feeds.conf.default` 中用 `^commit` 固定；已有 checkout 的 `feeds update` 只做 `git pull --ff-only`，不会切到新 pin，必须删掉重新拉取：
+PON 两个 feed 没有固定提交，`feeds update` 会拉到 fork 默认分支的最新提交；切换提交或改了源码后清包重编：
 
 ```sh
-# 1. 在 fork 仓库提交并推送，记下新 commit
-# 2. 更新 feeds.conf.default 中对应 feed 的 ^commit
 rm -rf feeds/pon_drivers          # 用户态改动改为 feeds/pon_userspace
 ./scripts/feeds update pon_drivers
 ./scripts/feeds install -a
@@ -138,7 +127,7 @@ make package/feeds/pon_userspace/airoha-ponctl/compile -j$(nproc) V=s
 make -j$(nproc)                   # 重打固件镜像
 ```
 
-仅做本地验证、暂时不推送时，可以直接改 `feeds/pon_drivers`（或 `feeds/pon_userspace`）里的源码，然后只清包重编；期间不要执行 `feeds update`。这种构建不可复现，最终版本仍须提交 fork、推送并更新 pin，否则云编译取不到改动。
+仅做本地验证、暂时不推送时，可以直接改 `feeds/pon_drivers`（或 `feeds/pon_userspace`）里的源码，然后只清包重编；期间不要执行 `feeds update`。最终版本须提交到 fork 并推送，否则云编译取不到改动。
 
 **构建记录**
 
@@ -146,7 +135,7 @@ make -j$(nproc)                   # 重打固件镜像
 
 ```sh
 git rev-parse HEAD
-git -C feeds/pon_drivers rev-parse HEAD      # 应等于 feeds.conf.default 的 pin
+git -C feeds/pon_drivers rev-parse HEAD      # feed 未固定提交，记录实际拉到的提交
 git hash-object target/linux/airoha/patches-6.18/608-net-pcs-airoha-add-AN7581-PON-line-modes.patch
 sha256sum bin/targets/airoha/an7581/*.itb
 ```
