@@ -33,7 +33,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  #include <linux/pcs/pcs-provider.h>
  #include <linux/phy/phy.h>
  #include <linux/phylink.h>
-@@ -188,6 +190,277 @@
+@@ -188,6 +190,301 @@
  	return 0;
  }
  
@@ -139,8 +139,16 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
 +		return ret;
 +	/* Initial setup preserves register state; get_rx_status() reports FreqDet lock. */
 +	if (ret == -EIO)
-+		dev_dbg(priv->dev,
-+			"PON initial calibration has no FreqDet lock; waiting for RX_RDY/retrain\n");
++		dev_warn(priv->dev,
++			 "pon-fail: seg=2 stage=config-bringup mode=%u ret=-5 lock=0; RX reaches no RX_RDY\n",
++			 mode);
++
++	/* 第3段的落地铁证：WAN_SEL/XSI/接口与前端电气档一起写出来。 */
++	airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_ANA, "line-configured",
++			     "wan_sel=%lu xsi_sel=%u interface=%d setting0=0x%08x setting1=0x%08x start_ret=%d\n",
++			     FIELD_GET(AIROHA_SCU_WAN_SEL, wan_sel),
++			     FIELD_GET(AIROHA_SCU_PON_XSI_SEL, xsi_sel),
++			     rx_interface, xpon_setting0, xpon_setting1, ret);
 +
 +	dev_info(priv->dev, "PON line configured: mode=%u, WAN_SEL=%lu, full SerDes analog init\n",
 +		 mode,
@@ -308,10 +316,26 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
 +}
 +EXPORT_SYMBOL_GPL(airoha_pcs_pon_get_rx_status);
 +
++/*
++ * PCS 编译进内核(built-in)，没有自己的 module 参数；掩码由 airoha-xpon 在每次
++ * rx_start 前下发，改 /sys/module/airoha_xpon/parameters/pon_trace 后下一轮生效。
++ */
++void airoha_pcs_pon_set_trace(struct phylink_pcs *pcs, u8 mask)
++{
++	struct airoha_pcs_port *port;
++
++	if (!pcs)
++		return;
++
++	port = to_airoha_pcs_port(pcs);
++	port->priv->pon_trace = mask;
++}
++EXPORT_SYMBOL_GPL(airoha_pcs_pon_set_trace);
++
  static void airoha_pcs_init_usxgmii(struct airoha_pcs_priv *priv, int index)
  {
  	const struct airoha_pcs_match_data *data = priv->data;
-@@ -1263,6 +1536,12 @@
+@@ -1263,6 +1560,12 @@
  
  	priv->dev = dev;
  	priv->data = data;
@@ -324,7 +348,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  
  	if (data->port_type == AIROHA_PCS_USB ||
  	    device_is_compatible(dev, "airoha,an7583-pcs-pcie")) {
-@@ -1400,6 +1679,9 @@
+@@ -1400,6 +1703,9 @@
  	.alloc_regmap_fields = an7581_pcs_alloc_regmap_fields,
  	.bringup = an7581_pcs_bringup,
  	.link_up = an7581_pcs_phya_link_up,
@@ -334,7 +358,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  };
  
  static const struct airoha_pcs_match_data an7581_pcs_pcie = {
-@@ -1432,8 +1714,12 @@
+@@ -1432,8 +1738,12 @@
  	.port_type = AIROHA_PCS_PON,
  	.usxgmii_rx_gb_out_vld_tweak = true,
  	.usxgmii_xfi_mode_sel = true,
@@ -351,7 +375,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
 ===================================================================
 --- a/drivers/net/pcs/airoha/pcs-airoha.h
 +++ b/drivers/net/pcs/airoha/pcs-airoha.h
-@@ -1252,6 +1252,9 @@
+@@ -1254,6 +1254,9 @@
  #define   AIROHA_PCS_PMA_CK_RATE_5		FIELD_PREP_CONST(AIROHA_PCS_PMA_CK_RATE, 0x2)
  #define   AIROHA_PCS_PMA_AMP			GENMASK(10, 8)
  #define   AIROHA_PCS_PMA_PRBS_SEL		GENMASK(2, 0)
@@ -361,7 +385,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
  #define AIROHA_PCS_PMA_RX_FLL_5			0x184
  #define   AIROHA_PCS_PMA_FLL_IDAC_MIN		GENMASK(26, 16)
  #define   AIROHA_PCS_PMA_FLL_IDAC_MAX		GENMASK(10, 0)
-@@ -1325,6 +1328,9 @@
+@@ -1327,6 +1330,9 @@
  #define AIROHA_PCS_PMA_TX_CALIB_0		0x264
  #define   AIROHA_PCS_PMA_TXCALIB_FORCE_TERMP_SEL GENMASK(25, 24)
  #define   AIROHA_PCS_PMA_TXCALIB_FORCE_TERMP_SEL_EN BIT(16)
@@ -371,14 +395,15 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
  #define AIROHA_PCS_PMA_RX_TORGS_DEBUG_11	0x290
  #define   AIROHA_PCS_PMA_EYE_EB			GENMASK(14, 8)
  #define   AIROHA_PCS_PMA_EYE_EU			GENMASK(6, 0)
-@@ -1643,5 +1649,6 @@ struct airoha_pcs_priv {
+@@ -1646,6 +1652,7 @@
+ struct airoha_pcs_priv {
  	struct device *dev;
  	const struct airoha_pcs_match_data *data;
 +	u8 pon_mode;
  
  	struct airoha_pcs_port *ports;
  
-@@ -1660,6 +1667,17 @@ struct airoha_pcs_priv {
+@@ -1663,6 +1670,20 @@
  	struct phy *phy;
  
  	bool manual_rx_calib;
@@ -393,10 +418,13 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
 +	u32 pon_eo_fom;
 +	u8 pon_eo_gain;
 +	u8 pon_eo_peaking;
++
++	/* Trace mask pushed down by the airoha-xpon host driver before each bring-up. */
++	u8 pon_trace;
  };
  
  struct airoha_pcs_port {
-@@ -1678,11 +1696,17 @@ struct airoha_pcs_match_data {
+@@ -1682,20 +1703,53 @@
  	bool usxgmii_rx_gb_out_vld_tweak;
  	bool usxgmii_xfi_mode_sel;
  
@@ -414,7 +442,26 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
  };
  
  #define to_airoha_pcs_port(n) container_of(n, struct airoha_pcs_port, pcs)
-@@ -1692,6 +1716,16 @@ int an7581_pcs_alloc_regmap_fields(struc
+ 
++/*
++ * 全链路取证日志的内核侧一半。段号与 airoha-xpon 主机驱动完全对齐：bit1 是第 2 段
++ * (PMA 校准)，bit2 是第 3 段(线路制式/模拟档)，掩码由驱动在每次 bringup 前用
++ * airoha_pcs_pon_set_trace() 下发，PCS 是 built-in，没有自己的运行时开关。
++ */
++#define AIROHA_PCS_TRACE_SEG_PMA	2
++#define AIROHA_PCS_TRACE_SEG_ANA	3
++
++#define airoha_pcs_pon_trace(priv, seg, stage, fmt, ...)			     \
++	do {								     \
++		if ((priv)->pon_trace & BIT((seg) - 1))			     \
++			dev_info((priv)->dev,				     \
++				 "pon-trace: seg=%u stage=%s mode=%u " fmt,     \
++				 (u32)(seg), (stage), (priv)->pon_mode,	     \
++				 ##__VA_ARGS__);				     \
++	} while (0)
++
+ #if IS_ENABLED(CONFIG_PCS_AIROHA_AN7581)
+ int an7581_pcs_alloc_regmap_fields(struct airoha_pcs_priv *priv);
  int an7581_pcs_pcie_alloc_regmap_fields(struct airoha_pcs_priv *priv);
  int an7581_pcs_bringup(struct airoha_pcs_priv *priv,
  		       int index, phy_interface_t interface);
@@ -431,7 +478,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
  int an7581_pcs_usb_bringup(struct airoha_pcs_priv *priv,
  			   int index, phy_interface_t interface);
  
-@@ -1714,6 +1748,46 @@ static inline int an7581_pcs_bringup(str
+@@ -1718,6 +1772,46 @@
  	return -EOPNOTSUPP;
  }
  
@@ -478,7 +525,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha.h
  static inline int an7581_pcs_usb_bringup(struct airoha_pcs_priv *priv,
  					 int index, phy_interface_t interface)
  {
-@@ -1733,19 +1807,50 @@ static inline int an7581_pcs_rxlock_work
+@@ -1737,19 +1831,50 @@
  #endif
  
  #ifdef CONFIG_PCS_AIROHA_AN7583
@@ -541,7 +588,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  #include <linux/phylink.h>
  #include <linux/regmap.h>
  
-@@ -1825,20 +1826,1542 @@
+@@ -1825,20 +1826,1562 @@
  			  AIROHA_PCS_PMA_FORCE_SEL_DA_CDR_LPF_LCK2DATA);
  }
  
@@ -977,6 +1024,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +	struct airoha_pcs_priv *priv, int index)
 +{
 +	struct regmap *pma = priv->pcs_pma[index];
++	u32 rx_sel, tx0, tx1;
 +
 +	/* EN7581_EFUSE=0 defaults from xpon_pma_param_opt(). */
 +	regmap_update_bits(priv->pcs_ana, AIROHA_PCS_ANA_PXP_RX_SIGDET_NOVTH,
@@ -997,6 +1045,17 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +			   FIELD_PREP(AIROHA_PCS_PMA_TXCALIB_FORCE_TERMN_SEL,
 +				      AN7581_PON_TX_IMPEDANCE_DEFAULT) |
 +			   AIROHA_PCS_PMA_TXCALIB_FORCE_TERMN_SEL_EN);
++
++	/* 读回而不是回显常量：EFUSE=1 或别的序列可能把它们改成别的档位。 */
++	regmap_read(priv->pcs_ana, AIROHA_PCS_ANA_PXP_RX_SIGDET_NOVTH, &rx_sel);
++	regmap_read(pma, AIROHA_PCS_PMA_TX_CALIB_0, &tx0);
++	regmap_read(pma, AIROHA_PCS_PMA_TX_CALIB_1, &tx1);
++	airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_ANA, "impedance-defaults",
++			     "index=%d rx_sel=%lu tx_term_p=%lu tx_term_n=%lu\n",
++			     index,
++			     FIELD_GET(AIROHA_PCS_ANA_RX_FE_50OHMS_SEL, rx_sel),
++			     FIELD_GET(AIROHA_PCS_PMA_TXCALIB_FORCE_TERMP_SEL, tx0),
++			     FIELD_GET(AIROHA_PCS_PMA_TXCALIB_FORCE_TERMN_SEL, tx1));
 +}
 +
 +static int an7581_pcs_pon_xgpon_static(struct airoha_pcs_priv *priv,
@@ -2030,6 +2089,10 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +		priv->pon_last_error = 0;
 +		priv->pon_calibration_runs++;
 +		an7581_pcs_pon_set_stage(priv, AN7581_PON_STAGE_PRCAL);
++		airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_PMA, "legacy-start",
++				     "index=%d runs=%u manual_calib=%d\n",
++				     index, priv->pon_calibration_runs,
++				     priv->manual_rx_calib);
 +		ret = an7581_pcs_bringup(priv, index, interface);
 +		if (ret)
 +			priv->pon_last_error = ret;
@@ -2072,6 +2135,10 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  
 +	calibrate = priv->manual_rx_calib || an7581_pcs_pon_manual_calib(priv);
 +
++	airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_PMA, "phya-bringup",
++			     "index=%d calibrate=%d interface=%d\n",
++			     index, calibrate, interface);
++
  	an7581_pcs_tx_bringup(priv, index, interface);
  	an7581_pcs_rx_bringup(priv, index, interface);
 +	if (priv->data->port_type == AIROHA_PCS_PON)
@@ -2085,7 +2152,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  
  	/* Global reset clear */
  	regmap_update_bits(pcs_pma, AIROHA_PCS_PMA_SW_RST_SET,
-@@ -1880,7 +3403,7 @@
+@@ -1880,7 +3423,7 @@
  	/* Manual RX calibration is required only for SoC before E2
  	 * revision. E2+ SoC autocalibrate RX and only CDR reset is needed.
  	 */
@@ -2094,6 +2161,27 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  		return 0;
  
  	/* It was discovered that after a global reset and auto mode gets
+@@ -1904,12 +3447,20 @@
+ 			return -EIO;
+ 		}
+ 
++		/* 重试循环只打首次；末次由上面的 dev_err 与调用方的 pon-fail 覆盖。 */
++		if (calibration_try == 0)
++			airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_PMA, "fbck-miss",
++					     "index=%d freqdet=0x%08x\n", index, val);
++
+ 		calibration_try++;
+ 
+ 		dev_dbg(priv->dev, "No FBCK Lock from FreqDet module, retry calibration.\n");
+ 		goto retry_calibration;
+ 	}
+ 
++	airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_PMA, "fbck-locked",
++			     "index=%d try=%d freqdet=0x%08x\n",
++			     index, calibration_try, val);
+ 	return 0;
+ }
+ 
 Index: b/drivers/net/pcs/airoha/pcs-an7583.c
 ===================================================================
 --- a/drivers/net/pcs/airoha/pcs-an7583.c
@@ -3133,7 +3221,7 @@ Index: b/include/linux/pcs/pcs-airoha.h
 ===================================================================
 --- /dev/null
 +++ b/include/linux/pcs/pcs-airoha.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,107 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef __LINUX_PCS_AIROHA_H
 +#define __LINUX_PCS_AIROHA_H
@@ -3229,5 +3317,15 @@ Index: b/include/linux/pcs/pcs-airoha.h
 + */
 +int airoha_pcs_pon_get_rx_status(struct phylink_pcs *pcs,
 +				 struct airoha_pcs_pon_rx_status *status);
++
++/**
++ * airoha_pcs_pon_set_trace() - push the full-chain trace mask into built-in PCS
++ * @pcs: Airoha PON PCS returned by fwnode_pcs_get()
++ * @mask: bit0..bit7 selects segment 1..8; 0 disables every PCS trace line
++ *
++ * The PCS driver is built into the kernel and has no module parameter of its
++ * own, so the host driver forwards pon_trace here before each rx_start.
++ */
++void airoha_pcs_pon_set_trace(struct phylink_pcs *pcs, u8 mask);
 +
 +#endif /* __LINUX_PCS_AIROHA_H */
