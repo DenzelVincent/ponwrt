@@ -9,12 +9,12 @@ sequence and register layout used by AN7581 and AN7583.
 
 Signed-off-by: pbs05 <27010143+pbs05@users.noreply.github.com>
 ---
- drivers/net/pcs/airoha/pcs-airoha-common.c |  247 ++++
+ drivers/net/pcs/airoha/pcs-airoha-common.c |  286 ++++
  drivers/net/pcs/airoha/pcs-airoha.h        |  105 ++
- drivers/net/pcs/airoha/pcs-an7581.c        | 1459 ++++++++++++++++++++
+ drivers/net/pcs/airoha/pcs-an7581.c        | 1527 +++++++++++++++++++++
  drivers/net/pcs/airoha/pcs-an7583.c        |  799 ++++++++---
- include/linux/pcs/pcs-airoha.h             |   85 ++
- 5 files changed, 2472 insertions(+), 223 deletions(-)
+ include/linux/pcs/pcs-airoha.h             |   97 ++
+ 5 files changed, 2589 insertions(+), 225 deletions(-)
  create mode 100644 include/linux/pcs/pcs-airoha.h
 
 Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
@@ -33,7 +33,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  #include <linux/pcs/pcs-provider.h>
  #include <linux/phy/phy.h>
  #include <linux/phylink.h>
-@@ -183,6 +185,244 @@ static int airoha_pcs_setup_scu(struct a
+@@ -188,6 +190,277 @@
  	return 0;
  }
  
@@ -202,7 +202,8 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
 +{
 +	struct airoha_pcs_port *port;
 +	struct airoha_pcs_priv *priv;
-+	u32 freqdet, freqdet_target, ready_disable, ready_force, reset, sigdet;
++	u32 freqdet, freqdet_target, idac, ready_disable, ready_force, reset;
++	u32 setting0, setting1, sigdet, wan_conf, xsi_sel;
 +	int ret;
 +
 +	if (!pcs || !status)
@@ -264,6 +265,38 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
 +		return ret;
 +	status->rx_fifo_reset_released =
 +		!!(reset & AIROHA_PCS_PMA_SW_RX_FIFO_RST_N);
++
++	/* PrCal result: a zero idac means the manual calibration never ran. */
++	ret = regmap_read(priv->pcs_pma[port->index],
++			  AIROHA_PCS_PMA_PXP_CDR_PR_IDAC, &idac);
++	if (ret)
++		return ret;
++	status->cdr_pr_idac = FIELD_GET(AIROHA_PCS_PMA_FORCE_CDR_PR_IDAC, idac);
++
++	/* Optical frontend electrical settings applied before PMA bring-up. */
++	ret = regmap_read(priv->pcs_pma[port->index],
++			  AIROHA_PCS_PMA_XPON_SETTING_0, &setting0);
++	if (ret)
++		return ret;
++	status->xpon_setting0 = setting0;
++
++	ret = regmap_read(priv->pcs_pma[port->index],
++			  AIROHA_PCS_PMA_XPON_SETTING_1, &setting1);
++	if (ret)
++		return ret;
++	status->xpon_setting1 = setting1;
++
++	/* SCU readback proves which line rate and XSI the port actually uses. */
++	ret = regmap_read(priv->scu, AIROHA_SCU_WAN_CONF, &wan_conf);
++	if (ret)
++		return ret;
++	status->wan_sel = FIELD_GET(AIROHA_SCU_WAN_SEL, wan_conf);
++
++	ret = regmap_read(priv->scu, AIROHA_SCU_SSTR, &xsi_sel);
++	if (ret)
++		return ret;
++	status->xsi_sel = FIELD_GET(AIROHA_SCU_PON_XSI_SEL, xsi_sel);
++
 +	status->calibration_stage = READ_ONCE(priv->pon_stage);
 +	status->calibration_error = READ_ONCE(priv->pon_last_error);
 +	status->calibration_runs = READ_ONCE(priv->pon_calibration_runs);
@@ -278,7 +311,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  static void airoha_pcs_init_usxgmii(struct airoha_pcs_priv *priv, int index)
  {
  	const struct airoha_pcs_match_data *data = priv->data;
-@@ -1251,6 +1491,12 @@ static int airoha_pcs_probe(struct platf
+@@ -1263,6 +1536,12 @@
  
  	priv->dev = dev;
  	priv->data = data;
@@ -291,7 +324,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  
  	if (data->port_type == AIROHA_PCS_USB ||
  	    device_is_compatible(dev, "airoha,an7583-pcs-pcie")) {
-@@ -1403,6 +1649,9 @@ static const struct airoha_pcs_match_dat
+@@ -1400,6 +1679,9 @@
  	.alloc_regmap_fields = an7581_pcs_alloc_regmap_fields,
  	.bringup = an7581_pcs_bringup,
  	.link_up = an7581_pcs_phya_link_up,
@@ -301,7 +334,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
  };
  
  static const struct airoha_pcs_match_data an7581_pcs_pcie = {
-@@ -1435,8 +1684,12 @@ static const struct airoha_pcs_match_dat
+@@ -1432,8 +1714,12 @@
  	.port_type = AIROHA_PCS_PON,
  	.usxgmii_rx_gb_out_vld_tweak = true,
  	.usxgmii_xfi_mode_sel = true,
@@ -500,15 +533,15 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 ===================================================================
 --- a/drivers/net/pcs/airoha/pcs-an7581.c
 +++ b/drivers/net/pcs/airoha/pcs-an7581.c
-@@ -4,6 +4,7 @@
-  * Author: Christian Marangi <ansuelsmth@gmail.com>
+@@ -5,6 +5,7 @@
   */
+ #include <linux/math.h>
  #include <linux/phy/phy.h>
 +#include <linux/pcs/pcs-airoha.h>
  #include <linux/phylink.h>
  #include <linux/regmap.h>
  
-@@ -1821,6 +1822,1476 @@ static void an7581_pcs_cdr_reset(struct
+@@ -1825,20 +1826,1542 @@
  			  AIROHA_PCS_PMA_FORCE_SEL_DA_CDR_LPF_LCK2DATA);
  }
  
@@ -1952,13 +1985,60 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +	return 0;
 +}
 +
++/*
++ * The PON PCS never sets manual_rx_calib: the probe path only enables it for
++ * the Ethernet PCS on pre-E2 silicon. GPON RX is the 2.48832G SerDes path and
++ * has no hardware autocalibration equivalent, so it must use the manual PrCal
++ * and FreqDet window sequence to let the RX control sequence reach RX_RDY.
++ */
++static bool an7581_pcs_pon_manual_calib(struct airoha_pcs_priv *priv)
++{
++	return priv->data->port_type == AIROHA_PCS_PON &&
++	       priv->pon_mode == AIROHA_PCS_PON_MODE_GPON;
++}
++
++static void an7581_pcs_pon_log_legacy_rx(struct airoha_pcs_priv *priv,
++					 int index, int ret)
++{
++	struct regmap *pma = priv->pcs_pma[index];
++	u32 freqdet, idac, window;
++	u16 beg, end;
++
++	regmap_read(pma, AIROHA_PCS_PMA_RX_FREQDET, &freqdet);
++	regmap_read(pma, AIROHA_PCS_PMA_PXP_CDR_PR_IDAC, &idac);
++	regmap_read(pma, AIROHA_PCS_PMA_SS_RX_FREQ_DET_2, &window);
++	beg = FIELD_GET(AIROHA_PCS_PMA_LOCK_TARGET_BEG, window);
++	end = FIELD_GET(AIROHA_PCS_PMA_LOCK_TARGET_END, window);
++
++	dev_info(priv->dev,
++		 "PON low-rate bringup: mode=%u ret=%d lock=%d fl=0x%04x idac=0x%03x window=0x%04x-0x%04x\n",
++		 priv->pon_mode, ret,
++		 !!(freqdet & AIROHA_PCS_PMA_FBCK_LOCK),
++		 (unsigned int)FIELD_GET(AIROHA_PCS_PMA_FL_OUT, freqdet),
++		 (unsigned int)FIELD_GET(AIROHA_PCS_PMA_FORCE_CDR_PR_IDAC, idac),
++		 beg, end);
++}
++
 +int an7581_pcs_pon_start_rx(struct airoha_pcs_priv *priv, int index,
 +			    phy_interface_t interface)
 +{
++	int ret;
++
 +	/* 1G and 2.5G PON modes use the existing bring-up path. */
 +	if (priv->pon_mode == AIROHA_PCS_PON_MODE_GPON ||
-+	    priv->pon_mode == AIROHA_PCS_PON_MODE_EPON_1G)
-+		return an7581_pcs_bringup(priv, index, interface);
++	    priv->pon_mode == AIROHA_PCS_PON_MODE_EPON_1G) {
++		priv->pon_last_error = 0;
++		priv->pon_calibration_runs++;
++		an7581_pcs_pon_set_stage(priv, AN7581_PON_STAGE_PRCAL);
++		ret = an7581_pcs_bringup(priv, index, interface);
++		if (ret)
++			priv->pon_last_error = ret;
++		an7581_pcs_pon_set_stage(priv, ret ? AN7581_PON_STAGE_FAILED :
++						     AN7581_PON_STAGE_RX_READY);
++		an7581_pcs_pon_log_legacy_rx(priv, index, ret);
++
++		return ret;
++	}
 +
 +	return an7581_pcs_pon_first_plug(priv, index, interface);
 +}
@@ -1985,8 +2065,13 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  static int an7581_pcs_phya_bringup(struct airoha_pcs_priv *priv,
  				   int index, phy_interface_t interface)
  {
-@@ -1834,6 +3296,8 @@ static int an7581_pcs_phya_bringup(struc
+ 	struct regmap *pcs_pma = priv->pcs_pma[index];
+ 	int calibration_try = 0;
++	bool calibrate;
+ 	u32 val = 0;
  
++	calibrate = priv->manual_rx_calib || an7581_pcs_pon_manual_calib(priv);
++
  	an7581_pcs_tx_bringup(priv, index, interface);
  	an7581_pcs_rx_bringup(priv, index, interface);
 +	if (priv->data->port_type == AIROHA_PCS_PON)
@@ -1994,6 +2079,21 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  
  	usleep_range(100, 200);
  
+ retry_calibration:
+-	an7581_pcs_cdr_reset(priv, index, interface, priv->manual_rx_calib);
++	an7581_pcs_cdr_reset(priv, index, interface, calibrate);
+ 
+ 	/* Global reset clear */
+ 	regmap_update_bits(pcs_pma, AIROHA_PCS_PMA_SW_RST_SET,
+@@ -1880,7 +3403,7 @@
+ 	/* Manual RX calibration is required only for SoC before E2
+ 	 * revision. E2+ SoC autocalibrate RX and only CDR reset is needed.
+ 	 */
+-	if (!priv->manual_rx_calib)
++	if (!calibrate)
+ 		return 0;
+ 
+ 	/* It was discovered that after a global reset and auto mode gets
 Index: b/drivers/net/pcs/airoha/pcs-an7583.c
 ===================================================================
 --- a/drivers/net/pcs/airoha/pcs-an7583.c
@@ -3033,7 +3133,7 @@ Index: b/include/linux/pcs/pcs-airoha.h
 ===================================================================
 --- /dev/null
 +++ b/include/linux/pcs/pcs-airoha.h
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,97 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +#ifndef __LINUX_PCS_AIROHA_H
 +#define __LINUX_PCS_AIROHA_H
@@ -3069,6 +3169,11 @@ Index: b/include/linux/pcs/pcs-airoha.h
 + * @frequency_target: center of the FreqDet lock window; XG-PON uses 0xa49a
 + * @rx_ready_gate: RX-ready gate is forced on
 + * @rx_fifo_reset_released: RX FIFO reset_n is released
++ * @cdr_pr_idac: CDR PR idac selected by PrCal, 0 when calibration never ran
++ * @xpon_setting0: PMA XPON_SETTING_0 readback applied by the optical frontend
++ * @xpon_setting1: PMA XPON_SETTING_1 readback applied by the optical frontend
++ * @wan_sel: SCU WAN_SEL selector currently programmed
++ * @xsi_sel: SCU PON XSI selector currently programmed
 + */
 +struct airoha_pcs_pon_rx_status {
 +	bool signal_detected;
@@ -3078,6 +3183,11 @@ Index: b/include/linux/pcs/pcs-airoha.h
 +	u16 frequency_target;
 +	bool rx_ready_gate;
 +	bool rx_fifo_reset_released;
++	u16 cdr_pr_idac;
++	u32 xpon_setting0;
++	u32 xpon_setting1;
++	u8 wan_sel;
++	u8 xsi_sel;
 +	u32 calibration_stage;
 +	s32 calibration_error;
 +	u32 calibration_runs;
