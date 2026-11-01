@@ -59,8 +59,8 @@ git clone --depth 1 -b AN7581-GPON https://github.com/DenzelVincent/ponwrt.git
 cd ponwrt
 
 #  更新并安装 feeds（软件包源）
-#  本分支 feeds.conf.default 的 pon_drivers / pon_userspace 指向本仓库 fork，内容与 pbs05 上游一致
-#  这两行未固定提交，会跟随 fork 默认分支最新提交；需要可复现构建时在 URL 后加 ^commit
+#  本分支 feeds.conf.default 的 pon_drivers / pon_userspace 指向本仓库 fork 的 GPON 分支
+#  （gpon-mac / gpon-luci）；两行未固定提交，会跟随分支最新提交，需要可复现构建时在 URL 后加 ^commit
 #  已存在的 feed 目录不会被 update 切换到新提交，需要时先 rm -rf feeds/<name> 再 update
 ./scripts/feeds update -a
 ./scripts/feeds install -a
@@ -105,7 +105,7 @@ make -j$(nproc)                   # 重打固件镜像
 
 **feed 软件包（PON 驱动 / 用户态）**
 
-PON 两个 feed 没有固定提交，`feeds update` 会拉到 fork 默认分支的最新提交；切换提交或改了源码后清包重编：
+PON 两个 feed 没有固定提交，`feeds update` 会拉到 fork GPON 分支的最新提交；切换提交或改了源码后清包重编：
 
 ```sh
 rm -rf feeds/pon_drivers          # 用户态改动改为 feeds/pon_userspace
