@@ -145,7 +145,7 @@ Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
 +
 +	/* 第3段的落地铁证：WAN_SEL/XSI/接口与前端电气档一起写出来。 */
 +	airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_ANA, "line-configured",
-+			     "wan_sel=%lu xsi_sel=%u interface=%d setting0=0x%08x setting1=0x%08x start_ret=%d\n",
++			     "wan_sel=%lu xsi_sel=%lu interface=%d setting0=0x%08x setting1=0x%08x start_ret=%d\n",
 +			     FIELD_GET(AIROHA_SCU_WAN_SEL, wan_sel),
 +			     FIELD_GET(AIROHA_SCU_PON_XSI_SEL, xsi_sel),
 +			     rx_interface, xpon_setting0, xpon_setting1, ret);
