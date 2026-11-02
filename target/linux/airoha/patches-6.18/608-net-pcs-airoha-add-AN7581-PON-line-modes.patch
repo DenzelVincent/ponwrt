@@ -9,12 +9,12 @@ sequence and register layout used by AN7581 and AN7583.
 
 Signed-off-by: pbs05 <27010143+pbs05@users.noreply.github.com>
 ---
- drivers/net/pcs/airoha/pcs-airoha-common.c |  286 ++++
- drivers/net/pcs/airoha/pcs-airoha.h        |  105 ++
- drivers/net/pcs/airoha/pcs-an7581.c        | 1527 +++++++++++++++++++++
+ drivers/net/pcs/airoha/pcs-airoha-common.c |  310 ++++
+ drivers/net/pcs/airoha/pcs-airoha.h        |  125 +++
+ drivers/net/pcs/airoha/pcs-an7581.c        | 1602 +++++++++++++++++++++++++
  drivers/net/pcs/airoha/pcs-an7583.c        |  799 ++++++++---
- include/linux/pcs/pcs-airoha.h             |   97 ++
- 5 files changed, 2589 insertions(+), 225 deletions(-)
+ include/linux/pcs/pcs-airoha.h             |  107 +++
+ 5 files changed, 2718 insertions(+), 225 deletions(-)
  create mode 100644 include/linux/pcs/pcs-airoha.h
 
 Index: b/drivers/net/pcs/airoha/pcs-airoha-common.c
@@ -588,7 +588,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  #include <linux/phylink.h>
  #include <linux/regmap.h>
  
-@@ -1825,20 +1826,1562 @@
+@@ -1825,20 +1826,1609 @@
  			  AIROHA_PCS_PMA_FORCE_SEL_DA_CDR_LPF_LCK2DATA);
  }
  
@@ -707,6 +707,12 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +	AN7581_PON_PMA(0x088, 8, 8, 0),
 +	AN7581_PON_PMA(0x088, 0, 0, 1),
 +};
++
++/*
++ * XPON_RX() 的公共前缀（与模式无关），到 ANA(0x0d8, 9, 8, 1) 为止；
++ * 从 ANA(0x10c, 2, 2, 1) 起是 XG-PON/10G-EPON 的专属分支。
++ */
++#define AN7581_XGPON_RX_COMMON_N 17
 +
 +/* XPON_RX(9) selects the XG-PON RX rate, OSR, PHYCK, and reserve fields. */
 +static const struct an7581_pon_reg_field an7581_xgpon_rx[] = {
@@ -1162,6 +1168,32 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +	udelay(100);
 +
 +	return 0;
++}
++
++/*
++ * GPON 走 legacy bringup，但厂商 pon_CfgPhyType() 的公共 PON 寄存器序列
++ * 对 mode 0 也要执行。这里只应用与模式无关的 cfg_pre/cfg_mid/RX 公共
++ * 前缀/cfg_post，不应用 XG-PON/10G-EPON 的 TXPLL/TX/RX 专属分支，也不
++ * 执行 PLL/TX-on 时序（本阶段 GPON 只收不发）。
++ */
++static int an7581_pcs_pon_gpon_static(struct airoha_pcs_priv *priv, int index)
++{
++	int ret;
++
++	ret = an7581_pcs_pon_apply_fields(priv, index, an7581_xgpon_cfg_pre,
++					  ARRAY_SIZE(an7581_xgpon_cfg_pre));
++	if (ret)
++		return ret;
++	ret = an7581_pcs_pon_apply_fields(priv, index, an7581_xgpon_cfg_mid,
++					  ARRAY_SIZE(an7581_xgpon_cfg_mid));
++	if (ret)
++		return ret;
++	ret = an7581_pcs_pon_apply_fields(priv, index, an7581_xgpon_rx,
++					  AN7581_XGPON_RX_COMMON_N);
++	if (ret)
++		return ret;
++	return an7581_pcs_pon_apply_fields(priv, index, an7581_xgpon_cfg_post,
++					   ARRAY_SIZE(an7581_xgpon_cfg_post));
 +}
 +
 +static int an7581_pcs_pon_xgpon_prcal_once(struct airoha_pcs_priv *priv,
@@ -2093,6 +2125,21 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
 +				     "index=%d runs=%u manual_calib=%d\n",
 +				     index, priv->pon_calibration_runs,
 +				     priv->manual_rx_calib);
++		if (priv->pon_mode == AIROHA_PCS_PON_MODE_GPON) {
++			ret = an7581_pcs_pon_gpon_static(priv, index);
++			if (ret) {
++				priv->pon_last_error = ret;
++				an7581_pcs_pon_set_stage(priv,
++							 AN7581_PON_STAGE_FAILED);
++				airoha_pcs_pon_trace(priv,
++						     AIROHA_PCS_TRACE_SEG_ANA,
++						     "gpon-static", "ret=%d\n",
++						     ret);
++				return ret;
++			}
++			airoha_pcs_pon_trace(priv, AIROHA_PCS_TRACE_SEG_ANA,
++					     "gpon-static", "applied\n");
++		}
 +		ret = an7581_pcs_bringup(priv, index, interface);
 +		if (ret)
 +			priv->pon_last_error = ret;
@@ -2152,7 +2199,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  
  	/* Global reset clear */
  	regmap_update_bits(pcs_pma, AIROHA_PCS_PMA_SW_RST_SET,
-@@ -1880,7 +3423,7 @@
+@@ -1880,7 +3470,7 @@
  	/* Manual RX calibration is required only for SoC before E2
  	 * revision. E2+ SoC autocalibrate RX and only CDR reset is needed.
  	 */
@@ -2161,7 +2208,7 @@ Index: b/drivers/net/pcs/airoha/pcs-an7581.c
  		return 0;
  
  	/* It was discovered that after a global reset and auto mode gets
-@@ -1904,12 +3447,20 @@
+@@ -1904,12 +3494,20 @@
  			return -EIO;
  		}
  
