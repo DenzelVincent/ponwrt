@@ -1,0 +1,9 @@
+# 本项目自建 feed 源: 由 publish-feed-repos.yml 编译并签名发布到本仓库 Pages, 私钥与固件那趟同一把
+# 官方下载站不托管这些 feed, 所以 an7581.config 里把 CONFIG_FEED_* 置 m, 让默认源列表 distfeeds.list 只剩官方地址
+# 不含 pon_drivers: 那批是 kmod, 与本机内核 vermagic 强绑定, 单包 apk add 风险最高, 驱动更新只能整镜像
+# 本文件由 apk 包安装并登记为 conffile, 构建不覆盖、sysupgrade 保留; 站点换名只改这里, CI 会逐条对账本次是否真产出对应文件
+# 设备端口径: 只 apk add 需要的单个包, 别跑 apk upgrade -a (官方源是每日 snapshot, 全局升级会与固件编译那天的基线错配)
+https://denzelvincent.github.io/ImmortalWrt-firmware-build/packages/aarch64_cortex-a53/pon_userspace/packages.adb
+https://denzelvincent.github.io/ImmortalWrt-firmware-build/packages/aarch64_cortex-a53/lucky/packages.adb
+https://denzelvincent.github.io/ImmortalWrt-firmware-build/packages/aarch64_cortex-a53/mosdns/packages.adb
+https://denzelvincent.github.io/ImmortalWrt-firmware-build/packages/aarch64_cortex-a53/airoha_npu/packages.adb
