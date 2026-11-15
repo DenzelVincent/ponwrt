@@ -1,0 +1,9 @@
+#!/bin/sh
+# WiFi AP 接口出现后重绑 mt76 线程亲和; 仅 phy*-ap0 触发, 有线目标天然不生效
+if [ "$ACTION" = "add" ]; then
+	case "$DEVICENAME" in
+		phy*-ap0)
+			/usr/sbin/pin-wifi-cpus.sh
+			;;
+	esac
+fi

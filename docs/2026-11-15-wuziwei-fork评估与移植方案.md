@@ -1,0 +1,101 @@
+# wuziwei fork 评估与移植方案
+
+日期：2026-11-15
+对象：https://github.com/wuziwei/ponwrt-ZN504-HG5585F （下称 fork）
+本地：DenzelVincent/ponwrt，实施分支 port/wuziwei-fixes（基于 master 51012c8ac4）
+
+## 一、fork 基本情况（证据）
+
+- fork 父仓库就是本项目上游 pbs05/ponwrt（GitHub API parent 字段确认）。
+- compare 结果：ahead 69 / behind 0，163 个文件改动（tmp/fork-compare.json）。
+- 创建 2026-11-08，最近推送 2026-11-15（活跃）；14 star / 7 fork。
+- fork 目标机型：兆能 ZN504XG-D、烽火 HG5585F CT/CU；本仓库 an7581.mk 本就支持
+  这些机型及 Gemtek/Nokia 等，故板级修复也在移植范围（用户拍板：多设备，有用的都纳入）。
+- 本地相对上游未改动 target/linux/airoha/、package/emortal/、package/system/rpcd/、
+  package/network/config/（git diff upstream/master..HEAD 核实）→ fork 补丁基线与我们一致。
+- README 营销措辞重，逐项核对代码后按下列分类定性。
+- fork 最新 release 止于 v2026.11.14-2227；931 的 hunk4 行数声明有误（见三），
+  932 在 11-15 才加 → 这两个内核补丁很可能未真正通过 fork 自己的 CI，我们必须自建验证。
+
+## 二、逐项定性
+
+### A. 已移植：SoC 级真实修复
+
+| 项 | 内容 | 证据 |
+|---|---|---|
+| 931-net-airoha-fix-wan-ipv6-pppoe-flow-offload.patch | PPE 四缺陷：路由 IPv6 误落 L2 黑洞、PPPoE session ID 被清、IPv6 条目 NPU 计数 stall、MTU 未留 PPPoE+VLAN 16 字节余量 | 上下文注释出自我们 930 补丁（930:69），基线吻合；hunk4 行数已修正 |
+| 932-net-airoha-ppe-support-bridge-fdb-port-offload.patch | br-lan egress 经 br_fdb_find_port 解析桥从口，WAN→LAN 才能硬件卸载；FDB 未学习安全回退 CPU | fork 称 88% 下行此前走 CPU；CONFIG_BRIDGE 门控写法正确 |
+| 133-rpcd-async-scan.patch | WiFi 扫描 fork 子进程+ubus 延迟应答+30s 超时，不阻塞 rpcd 事件 loop | 天然兼容：有线目标不触发扫描；rpcd 源码构建期拉取，需编译验证 |
+
+适用前提：931/932 只在 flow_offloading_hw=1 时生效。默认值不动（firewall.config 仅
+flow_offloading 1），LuCI 可开，实机验收后再定是否改默认。
+
+### B. 已移植：板级修正与 WiFi 兼容项（按机型/有无 WiFi 天然门控）
+
+| 项 | 内容 |
+|---|---|
+| an7581-fiberhome-hg5585f-ct.dts | 电信版硬件仅 USB 2.0，usb0 锁定 USB2 PHY；写法与 common dtsi 的 usb1 既有锁定一致，usb0_phy 标签已核实（an7581.dtsi:608） |
+| pin-wifi-cpus.sh + 99-wifi-affinity | mt76 线程亲和打散；原版硬编码 4 核掩码，已改写为 nproc 自适应（tx 绑末核、napi 轮转其余核，掩码按 %x 输出避免 taskset 十六进制误读）；hotplug 仅 phy*-ap0 add 触发，有线天然不生效 |
+| autocore Makefile 加 airoha% | 安装 tempinfo（通用读 thermal_zone0）；LuCI 温度行显示的 feed 脚本按"feed 补丁只给功能性缺陷"口径不取 |
+| cpufreq.uci 加 airoha 档 | ondemand 500M-1.2G/10/50；我们当前未装 cpufreq 包且内核已默认 ONDEMAND，此档仅在装包时生效，多设备构建有用、无副作用 |
+
+### C. 已移植：PON feed 功能性补丁（patches/ + 应用脚本）
+
+| 项 | 内容 | 证据 |
+|---|---|---|
+| 01-pon-drivers-epon-laser-recovery.patch | EN7572 SYS_TX_READY 8 次采样确认（~140ms 稳态，防冷启动假就绪）+ EPON LLID 卡死线路重开 worker（含固件重载升级） | EN7572 部分在共享前端驱动，对本机 XG-PON 同样有效；feed HEAD 无 reopen_holding（0 匹配），是比 feed 10-24 旧修更新的 11-11 版；对 feed 浅克隆 git apply --check 通过 |
+| 02-pon-userspace-loid-padding-wire-view.patch | LOID 左/右补零方向可选（华为等 OLT 互操作）+ 链路层原始报文展示 + pon-reopen 配套 | feed 无此功能（commit 列表核实）；git apply --check 通过；含既有 luci-app-pon 的功能性 UI，非新主题面板 |
+| scripts/apply-pon-feed-patches.sh | feeds install 后把两补丁打进 feed 本体，幂等（反向 check 判已应用），锚点失配报 ::error:: | tmp 克隆实测：首次应用成功、二次跳过 |
+
+编译仓库接线为后续项：ImmortalWrt-firmware-build 工作流需在 Install feeds 步骤后
+调用本脚本（与 patch-feed-packages.sh 并列），另行批准后实施。
+
+### D. 核实后排除（证据）
+
+| 项 | 原因 |
+|---|---|
+| /etc/Wireless SKU dat、07_an7581_bsp_wifi_mac preinit、mt7916-an-eeprom hotplug/init | fork 的 WiFi 同样用 mt76（release.config: kmod-mt7915e=y）；vendor 驱动文件与 mtwifi-macaddr 路径对 mt76 无效；EEPROM 上游 DTS NVMEM cell 已覆盖（hg5585f-common.dtsi:287 eeprom@1000，与 fork dd offset 一致） |
+| en7581_MT7916_npu_* 固件 blobs | NPU 固件名由 DTS firmware-name 指定（123 补丁），hg5585f/zn50x DTS 均无该属性 → 永不被加载；基础 en7581_npu_* 已有 airoha-en7581-npu-firmware 包（an7581.config:652） |
+| image.mk 裁剪 usb-sfp 变体 | fork 的发布策略（只出 4 镜像），非修复；多设备仓库保留全部变体 |
+| 03-iptv-bridge-mac-fix | 作用于 luci-app-iptv，fork 自己已删该包集成（d1ac6ad6ee）；我们不做 IPTV 单线复用 |
+| Vantage 主题、luci-app-airoha-npu、lucky、momo/sing-box 预置与版本 bump、99-custom-settings、release.config、build-zn504.yml、README | 主题面板/个人配置/发布策略，用户明确不要；CI 在编译仓库且"仅 tag 发布"口径冲突 |
+| sysupgrade.conf、backup/restore-fiberhome-pon.sh | 主要保 momo 非 /etc 路径；/etc/config/pon 默认随 /etc 保留，脚本属额外功能非修复 |
+| sysctl 16MB 缓冲、99-multicast | IPTV/BT 调优非修复；2MB 默认缓冲对 512MB OOM 史设备是风险；关 IGMP snooping 增加组播泛洪 |
+| firewall wan_6、config_generate 删 lan6、90-ipv6-fix fe80::1 假路由 | 个人接口命名与组网 workaround，假默认路由潜在有害 |
+| integrate-temperature.py + temperature-rpc.uc | CI 期改 luci feed 的外观集成，违反 feed 补丁口径 |
+| eip93 剔除 | configs/an7581.config:3324 早已 not set |
+
+## 三、实施记录（2026-11-15）
+
+落盘文件（分支 port/wuziwei-fixes）：
+- target/linux/airoha/patches-6.18/931-…、932-…
+- package/system/rpcd/patches/133-rpcd-async-scan.patch
+- patches/01-…、02-… + scripts/apply-pon-feed-patches.sh
+- files/usr/sbin/pin-wifi-cpus.sh、files/etc/hotplug.d/net/99-wifi-affinity
+- .gitignore（放开 /files 以纳入 overlay；加 PON 凭据/备份隐私忽略规则）
+- package/emortal/autocore/Makefile、package/emortal/cpufreq/files/cpufreq.uci
+- target/linux/airoha/dts/an7581-fiberhome-hg5585f-ct.dts
+
+关键修正与校验：
+- 931 第 4 hunk 原作者声明 -896,7/+897,8 实为 8/9（少算一行上下文），已修正为
+  -896,8/+897,9；后续 hunk 起始行号与修正后累计偏移逐一核对一致。
+- 全部 5 个补丁 hunk 行数复验 OK（124 hunk）；PON 两补丁对 feed HEAD 实测 apply 通过。
+- 全部新增/修改文件 CR 字节校验为 0（LF）；三个 shell 脚本 bash -n 通过。
+- apply 脚本 tmp 克隆实测幂等。
+
+## 四、风险与验收
+
+- 931/932 可能未经 fork CI 真正编译（hunk 错误+release 时间线），必须我们自建验证：
+  WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
+- 运行时验收：LuCI 开 flow_offloading_hw 后 IPv6 吞吐/连通、PPPoE session 稳定（如适用）、
+  BT 多连接 CPU/softirq 与 CDM 计数、长时间无 NPU stall；WiFi 机型另验扫描不卡 LuCI。
+- PON 补丁验收：冷启动出光上线稳定（EN7572 稳态判定）、LOID 补零方向切换（如 OLT 需要）。
+- 回退：删补丁/脚本重编即可，无配置耦合；feed 补丁随 feeds update 冲掉，不污染上游。
+
+## 五、决策记录
+
+- 2026-11-15 用户拍板：本仓库支持多设备，有用的补丁都纳入，用新分支维护；主题面板不要。
+- 已实施：A+B+C 全部落盘并校验，提交于 port/wuziwei-fixes（不推送，用户执行）。
+- [ ] 编译仓库工作流接线 apply-pon-feed-patches.sh（另行批准）
+- [ ] 用户侧编译+实机验收
+- [ ] 验收通过后决定是否默认开启 flow_offloading_hw
