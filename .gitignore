@@ -13,7 +13,7 @@
 /logs
 /feeds
 /feeds.conf
-/files
+# /files - 自定义 files overlay 纳入版本管理
 /target/linux/feeds
 /overlay
 /package/feeds
@@ -37,3 +37,14 @@ git-src
 .sccache
 .vscode*
 /.idea/
+
+# PON 认证凭据与 ISP 备份文件不入库
+*fiberhome_pon*
+*pon_backup*
+*pon_info*
+*factory_backup*
+*backup*.uci
+*backup*.tar*
+*backup*.bin
+files/etc/config/pon
+files/etc/fiberhome*

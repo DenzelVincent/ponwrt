@@ -28,3 +28,4 @@ configs/*.config text eol=lf
 feeds.conf.default text eol=lf
 *.yml text eol=lf
 *.md text eol=lf
+files/** text eol=lf
