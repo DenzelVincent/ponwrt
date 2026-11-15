@@ -3,8 +3,9 @@ src-git luci https://github.com/immortalwrt/luci.git
 src-git routing https://github.com/openwrt/routing.git
 src-git telephony https://github.com/openwrt/telephony.git
 src-git video https://github.com/openwrt/video.git
-src-git pon_drivers https://github.com/pbs05/openwrt-pon-drivers.git
-src-git pon_userspace https://github.com/pbs05/openwrt-pon-userspace.git
+# PON 两修复以 fork 真实提交承载并钉完整 sha（master 分支保持 pbs05 不钉）；带 ^ref 的 feed 不会再 update，换 pin 后本地须先删 feeds/pon_drivers 与 feeds/pon_userspace
+src-git pon_drivers https://github.com/DenzelVincent/openwrt-pon-drivers.git^d574aedbb6dc98d02e2b772a5d3163727a381d15
+src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git^e5f85de1c146eef11bd8ff93e4cda69af6312a90
 #src-git targets https://github.com/openwrt/targets.git
 #src-git oldpackages http://git.openwrt.org/packages.git
 #src-link custom /usr/src/openwrt/custom-feed

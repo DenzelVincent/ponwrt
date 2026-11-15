@@ -50,18 +50,32 @@ warn "Hardware flow offloading unavailable, falling back to software offloading"
 
 | 项 | 内容 | 证据 |
 |---|---|---|
-| 01-pon-drivers-epon-laser-recovery.patch | EN7572 SYS_TX_READY 8 次采样确认（~140ms 稳态，防冷启动假就绪）+ EPON LLID 卡死线路重开 worker（含固件重载升级） | EN7572 部分在共享前端驱动，对本机 XG-PON 同样有效；feed HEAD 无 reopen_holding（0 匹配），是比 feed 10-24 旧修更新的 11-11 版；对 feed 浅克隆 git apply --check 通过 |
-| 02-pon-userspace-loid-padding-wire-view.patch | LOID 左/右补零方向可选（华为等 OLT 互操作）+ 链路层原始报文展示 + pon-reopen 配套 | feed 无此功能（commit 列表核实）；git apply --check 通过；含既有 luci-app-pon 的功能性 UI，非新主题面板 |
-| ~~scripts/apply-pon-feed-patches.sh~~（方案作废，待删） | 原为 feeds install 后把两补丁打进 feed 本体，幂等（反向 check 判已应用），锚点失配报 ::error:: | tmp 克隆实测：首次应用成功、二次跳过。改走 fork 提交后不再需要，与 patches/01、02 一并删除 |
+| 01-pon-drivers-epon-laser-recovery.patch | EN7572 SYS_TX_READY 8 次采样确认（~140ms 稳态，防冷启动假就绪）+ EPON LLID 卡死线路重开 worker（含固件重载升级） | EN7572 部分在共享前端驱动，对本机 XG-PON 同样有效；是比 feed 10-24 旧修（33e02a3 TX readiness、a24ef29 恢复 ladder，11-07 合入 PR #11）更新的 11-11 版，epon.c 226 增 145 删属重写而非并列新增；对 fork tip 2789b970 `git apply --check` 通过 |
+| 02-pon-userspace-loid-padding-wire-view.patch | LOID 左/右补零方向可选（华为等 OLT 互操作）+ 链路层原始报文展示 + pon-reopen 配套 | feed 无此功能（`pad_left`/`loid_pad` 全仓库 0 命中）；对 fork tip cce9d756 `git apply --check` 通过；含既有 luci-app-pon 的功能性 UI，非新主题面板 |
+| ~~scripts/apply-pon-feed-patches.sh~~（方案作废，**已删**） | 原为 feeds install 后把两补丁打进 feed 本体，幂等（反向 check 判已应用），锚点失配报 ::error:: | **从未被接线**：固件工作流只调用 `$SCRIPT_PATCH_FEED_PACKAGES`（patch-feed-packages.sh），两仓库全文扫描无第二个调用方 → 这两个修复至今没进过任何 CI 产物。改走 fork 是它们第一次真正落地 |
 
 落地方式：fork pbs05/openwrt-pon-drivers 与 pbs05/openwrt-pon-userspace，把两个补丁作为真实提交打进去，
 bugfix 的 feeds.conf.default 改成 fork 地址 + ^<40位sha>；master 保持 pbs05 不钉。
 补丁进 feed 自己的版本历史后，scripts/feeds 克隆出来就是修好的源码，不再需要应用脚本、
-也不再被 feeds update 冲掉，故 patches/01、patches/02、scripts/apply-pon-feed-patches.sh 一并删除。
-状态：待用户建 fork 并提供两个 sha 后实施，详见编译仓库
-docs/2026-11-15-files迁移与源码分支选择设计.md 第三节 C 与第六节。
+也不再被 feeds update 冲掉，故 patches/01、patches/02、scripts/apply-pon-feed-patches.sh 一并删除（patches/ 目录随之消失）。
+
+状态：**已落地（2026-11-15）**。两个 fork 的 main 与 pbs05 上游 tip 逐字符相同（`git ls-remote` 对照），
+补丁作为真实提交打在 tip 之上并已推送：
+
+| fork | 基线（=上游 tip） | 修复提交 | 改动面 |
+|---|---|---|---|
+| DenzelVincent/openwrt-pon-drivers | `2789b970a6bfcc5ee56cee699622201b8061b67c` | `d574aedbb6dc98d02e2b772a5d3163727a381d15` | 9 文件 594 增 189 删 |
+| DenzelVincent/openwrt-pon-userspace | `cce9d756742487b378749c606b30e13ee9b0f093` | `e5f85de1c146eef11bd8ff93e4cda69af6312a90` | 17 文件 659 增 38 删 |
+
+行尾与改动面校验：两个 fork 都是 `core.autocrlf=true`、无 `.gitattributes`、工作区 CRLF / blob LF，
+`git add` 归一化后 `git diff --cached --numstat` 与补丁的 `git apply --numstat` **逐行完全一致**（9 行 / 17 行），
+证明没有行尾造成的整文件伪改动；26 个文件 blob CR 全为 0。
+新增的 `pon-reopen`、`pon-reopen.init` 在 git 里是补丁声明的 644，Makefile 用 `INSTALL_BIN` 安装（置 755），不影响可执行性。
+PKG_RELEASE bump 在补丁内：frontends 13→14、xpon 69→71、ponctl 1→2、daemons 2→3、luci-app-pon 3→4。
+
 连带后果：publish-feed-repos.yml 固定 master，Pages 上的 pon_userspace 仍是未修版；
 bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会降级，设备端安全，但 Pages 与内置版本会分叉。
+本地编译注意：带 `^ref` 的 feed 在 `scripts/feeds` 里不会再 update，换 pin 后须先删 `feeds/pon_drivers` 与 `feeds/pon_userspace`。
 
 ### D. 核实后排除（证据）
 
@@ -83,7 +97,7 @@ bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会�
 落盘文件（分支 bugfix，原 port/wuziwei-fixes）：
 - target/linux/airoha/patches-6.18/931-…、932-…
 - package/system/rpcd/patches/133-rpcd-async-scan.patch
-- patches/01-…、02-… + scripts/apply-pon-feed-patches.sh
+- ~~patches/01-…、02-… + scripts/apply-pon-feed-patches.sh~~（方案已废并删除：改走 feed fork 真实提交，见二·C）
 - files/usr/sbin/pin-wifi-cpus.sh、files/etc/hotplug.d/net/99-wifi-affinity
 - .gitignore（放开 /files 以纳入 overlay；加 PON 凭据/备份隐私忽略规则）
 - package/emortal/autocore/Makefile、package/emortal/autocore/files/cpuinfo；cpufreq 档位在 package/emortal/cpufreq/files/cpufreq.uci（原记录误写成 autocore 下）
@@ -138,8 +152,11 @@ bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会�
 - 2026-11-15 分支策略定案：master 保持不动（上游变动由用户自行合入），只维护一条 bug 修复分支；不按 WiFi 拆源码分支（两类默认配置/服务无分歧，WiFi 纯 device-profile 配置轴）。否决了"master 基准镜像+集成分支"重构方案。例外：2026-11-15 接受 files/ 迁移与配套 .gitignore/.gitattributes 改动进 master（overlay 所有权归一），修复本身仍只在 bugfix。
 - 2026-11-15 分支改名 port/wuziwei-fixes → bugfix（通用名，后续修复都进这里）。
 - 2026-11-15 tempinfo 保留；cpuinfo 把 airoha 加进温度跳过名单，架构行去掉重复 CPU 温度（提交 30958fb44f）。cpufreq 档位 845413a386 撤掉后由 54fb4465eb 恢复，包未选入仍是死代码，用户拍板不启用、保留不动。
-- 已实施：A+B 落盘并校验，C 改走 feed fork（待用户建 fork），提交于 bugfix（7eeb396c58 移植 + 30958fb44f 架构行去温度 + 845413a386 撤 cpufreq + 54fb4465eb 恢复 cpufreq 档位；不推送，用户执行）。
-- [ ] PON 修复改走 feed fork 提交 + 钉 sha（待用户建 fork 并提供两个 40 位 sha；应用脚本方案作废）
-- [ ] 用户侧编译+实机验收
+- 已实施：A+B 落盘并校验，提交于 bugfix（7eeb396c58 移植 + 30958fb44f 架构行去温度 + 845413a386 撤 cpufreq + 54fb4465eb 恢复 cpufreq 档位）。
+- 2026-11-15 用户点名授权「把所有改动提交推送」，本轮全部提交已推送（此前各轮均为用户自行推送）。
+- [x] PON 修复改走 feed fork 提交 + 钉 sha：两个 fork 已建并检出到本地，补丁作为真实提交打在 main 上
+      （drivers `d574aedb…`、userspace `e5f85de1…`）并已推送；bugfix 的 feeds.conf.default 钉这两个 sha，
+      patches/01、02 与 scripts/apply-pon-feed-patches.sh 已删；master 仍指 pbs05 不钉。详见二·C。
+- [ ] 用户侧编译+实机验收（PON 修复此前从未进过 CI 产物，本轮是第一次真正落地，编译验证不可省）
 - [x] flow_offloading_hw 出厂已默认开启（核查确认，无需改动）；改为验收硬件是否真的接受卸载
 - [x] cpufreq 包不启用（用户拍板）；845413a386 撤掉后由 54fb4465eb 恢复档位，因包未选入仍是死代码，保留不动
