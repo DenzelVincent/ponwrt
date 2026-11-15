@@ -37,7 +37,7 @@ flow_offloading 1），LuCI 可开，实机验收后再定是否改默认。
 | an7581-fiberhome-hg5585f-ct.dts | 电信版硬件仅 USB 2.0，usb0 锁定 USB2 PHY；写法与 common dtsi 的 usb1 既有锁定一致，usb0_phy 标签已核实（an7581.dtsi:608） |
 | pin-wifi-cpus.sh + 99-wifi-affinity | mt76 线程亲和打散；原版硬编码 4 核掩码，已改写为 nproc 自适应（tx 绑末核、napi 轮转其余核，掩码按 %x 输出避免 taskset 十六进制误读）；hotplug 仅 phy*-ap0 add 触发，有线天然不生效 |
 | autocore Makefile 加 airoha% + cpuinfo 跳过 airoha 温度 | 装 tempinfo 后概览页多一行独立"温度"（CPU+WiFi，WiFi 温度是架构行没有的新信息）；同时把 airoha 加进 cpuinfo 温度跳过名单（沿用 ipq/mediatek/qualcommax 既有设计），架构行不再重复显示 CPU 温度、只留频率。用户拍板 tempinfo 保留 |
-| cpufreq.uci 加 airoha 档 | ondemand 500M-1.2G/10/50；当前未装 cpufreq 包（configs 明确 not set）且内核已默认 ONDEMAND，此档是死代码、仅装包时生效。暂保留，是否撤掉待用户定 |
+| ~~cpufreq.uci 加 airoha 档~~（已撤掉 845413a386） | 曾加 ondemand 500M-1.2G/10/50；因 cpufreq 包未编入固件（configs 明确 not set）属死代码，用户拍板撤掉，cpufreq.uci 已还原 master |
 
 ### C. 已移植：PON feed 功能性补丁（patches/ + 应用脚本）
 
@@ -73,7 +73,7 @@ flow_offloading 1），LuCI 可开，实机验收后再定是否改默认。
 - patches/01-…、02-… + scripts/apply-pon-feed-patches.sh
 - files/usr/sbin/pin-wifi-cpus.sh、files/etc/hotplug.d/net/99-wifi-affinity
 - .gitignore（放开 /files 以纳入 overlay；加 PON 凭据/备份隐私忽略规则）
-- package/emortal/autocore/Makefile、package/emortal/autocore/files/cpuinfo、package/emortal/cpufreq/files/cpufreq.uci
+- package/emortal/autocore/Makefile、package/emortal/autocore/files/cpuinfo（cpufreq.uci 已撤掉还原 master）
 - target/linux/airoha/dts/an7581-fiberhome-hg5585f-ct.dts
 
 关键修正与校验：
@@ -97,9 +97,9 @@ flow_offloading 1），LuCI 可开，实机验收后再定是否改默认。
 - 2026-11-15 用户拍板：本仓库支持多设备，有用的补丁都纳入，用新分支维护；主题面板不要。
 - 2026-11-15 分支策略定案：master 保持不动（上游变动由用户自行合入），只维护一条 bug 修复分支；不按 WiFi 拆源码分支（两类默认配置/服务无分歧，WiFi 纯 device-profile 配置轴）。否决了"master 基准镜像+集成分支"重构方案。
 - 2026-11-15 分支改名 port/wuziwei-fixes → bugfix（通用名，后续修复都进这里）。
-- 2026-11-15 tempinfo 保留；cpuinfo 把 airoha 加进温度跳过名单，架构行去掉重复 CPU 温度（提交 30958fb44f）。cpufreq 死代码暂保留待用户定。
-- 已实施：A+B+C 全部落盘并校验，提交于 bugfix（7eeb396c58 移植 + 30958fb44f 架构行去温度；不推送，用户执行）。
+- 2026-11-15 tempinfo 保留；cpuinfo 把 airoha 加进温度跳过名单，架构行去掉重复 CPU 温度（提交 30958fb44f）。cpufreq 死代码已撤掉（845413a386，还原 master）。
+- 已实施：A+B+C 落盘并校验，提交于 bugfix（7eeb396c58 移植 + 30958fb44f 架构行去温度 + 845413a386 撤 cpufreq；不推送，用户执行）。
 - [ ] 编译仓库工作流接线 apply-pon-feed-patches.sh（另行批准）
 - [ ] 用户侧编译+实机验收
 - [ ] 验收通过后决定是否默认开启 flow_offloading_hw
-- [ ] cpufreq 死代码是否撤掉（用户定）
+- [x] cpufreq 死代码已撤掉（845413a386，用户拍板）
