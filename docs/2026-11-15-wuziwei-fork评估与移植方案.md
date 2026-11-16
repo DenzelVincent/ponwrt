@@ -137,10 +137,57 @@ bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会�
 分支选择连带后果：编译仓库固件工作流新增 `repo_branch` 输入（master / bugfix），
 选 bugfix 不只带 PON 修复，还会带上本节那两个 mt76 亲和性脚本，不是纯净的 A/B 对照。
 
+### 追加：bugfix 首次 CI 编译失败与修复（2026-11-16）
+
+现象：编译仓库 bugfix 分支 CI 日志 `logs_118338312753/2_build-firmware.txt` 报
+`ERROR: target/linux failed to build`。工作流三次重试（7826 / 7835 / 7852 行）是**同一个错**，
+只有第三次带 `V=s` 打出编译器诊断（7852–7876 行）：
+
+```
+airoha_ppe.c:444:54: error: 'struct <anonymous>' has no member named 'id'
+  444 |   u16 vid = data->vlan.num ? data->vlan.id : 0;
+```
+
+同日志 7454 / 7461 / 7468 行三条 `recursive dependency detected!`（qt5base-gui、fwknopd/FWKNOPD_GPG、
+squeezelite-custom）是 feed 既有噪声：紧随其后 7474 行 `# configuration written to .config`，与本次失败无关。
+
+根因：`airoha_flow_data.vlan` 是匿名结构 `{ struct { u16 id; __be16 proto; } hdr[2]; u8 num; }`，
+**没有标量 `vlan.id`**（上游 v6.18 `drivers/net/ethernet/airoha/airoha_eth.h`）。
+932 是 11-15 才移植进来的，四·1 的怀疑由此证实：fork 自己的 CI 没编过它。
+旁证：第三次重试只重编了 `airoha_ppe.o`，gcc 整个翻译单元只报这一个错，
+说明同文件 925 用的 `data->vlan.hdr[data->vlan.num - 1].id` 编译通过。
+
+修复（提交 `8889a4e91b`，只动 932 一个文件，3 增 2 删）：
+- `data->vlan.id` → `data->vlan.hdr[data->vlan.num - 1].id`，与 925:169 已在用的写法一致，
+  取最外层出向 tag，与 932 自身「查不到再按 vid=0 兜底」的语义相容。
+  越界安全：上游 `FLOW_ACTION_VLAN_PUSH` 在 `num == 2` 时直接返回 -EOPNOTSUPP，故 num ≤ 2。
+- 该 hunk 声明 `@@ -462,11 +465,26 @@` → `+465,27`（一行拆两行，new_count +1）。
+
+校验：`tmp/verify-patch-hunks.py` 逐 hunk 比对声明与实际行数、并核跨 hunk 累计偏移，
+925 / 931 / 932 / 133 共 4 补丁 27 hunk **0 失败**；932 暂存 blob CR=0、`i/lf w/lf attr/text eol=lf`。
+本机无 C 编译器与内核树，**未做编译实测**，编译验证仍须用户侧执行（见四·1）。
+
 ## 四、风险与验收
 
-- 931/932 可能未经 fork CI 真正编译（hunk 错误+release 时间线），必须我们自建验证：
-  WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
+- 931/932 未经 fork CI 真正编译——**932 已证实**（11-16 首次 CI 即编译失败，见三·追加），931 仍未验证。
+  必须我们自建验证：WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
+- **未修，待拍板：932 调 `br_fdb_find_port()` 会踩 RTNL 断言。**
+  上游 v6.18 `net/bridge/br_fdb.c` 的 `br_fdb_find_port()` 首行是 `ASSERT_RTNL()`，
+  而 `include/linux/rtnetlink.h` 里它是无条件的 `WARN_ONCE(!rtnl_is_locked(), …)`
+  （不受 CONFIG_PROVE_LOCKING 影响；本内核 PROVE_LOCKING 与 DEBUG_LOCK_ALLOC 均 not set）。
+  调用链 `flow_offload_work_handler`（workqueue）→ `nf_flow_offload_tuple` →
+  `block_cb->cb(TC_SETUP_CLSFLOWER, …)` → `airoha_ppe_setup_tc_block_cb`（持 `flow_offload_mutex`）→
+  `airoha_ppe_foe_entry_prepare`，全程只另有 `down_read(&flowtable->flow_block_lock)`，没有 RTNL；
+  本仓库 915-01 对 `nf_flow_table_offload.c` 只加 DSCP dissector，不改锁。
+  `rtnl_is_locked()` 是 `mutex_is_locked(&rtnl_mutex)`（看全局有无持锁者，不是当前任务），
+  所以后果是**概率性一次 WARN splat**，不是 panic；查表本身 RCU 安全（函数内部自取 rcu_read_lock）。
+  真实隐患：返回的 slave netdev 在 rcu_read_unlock 之后使用且未 dev_hold，
+  WiFi AP 口（phy0-ap0）随 wifi down/换信道 unregister 时有窄窗口竞态。
+  候选：①先接受 WARN 与窄竞态跑验收；②桥分支里包 `rtnl_lock()`——TC flower 路径是 RTNL→flow_offload_mutex，
+  反向取锁有 AB-BA 死锁风险，不建议；③**推荐**：改用本驱动已在用的 `dev_fill_forward_path()`
+  （706-01 的 `net/core/dev.c` hunk 全文无 RTNL 断言，`airoha_ppe_get_wdma_info` 就在 `rcu_read_lock()` 下调用它；
+  桥侧 `br_fill_forward_path` 走 `br_fdb_find_rcu`/`br_port_get_rcu`，见 675-05:55），
+  属重写 932 的查口机制，需另开一轮并重新编译验证。
 - 运行时验收：出厂已默认开启 flow_offloading_hw，先确认 fw4 未打 Hardware flow offloading unavailable 回退 warn，再验 IPv6 吞吐/连通、PPPoE session 稳定（如适用）、
   BT 多连接 CPU/softirq 与 CDM 计数、长时间无 NPU stall；WiFi 机型另验扫描不卡 LuCI。
 - PON 补丁验收：冷启动出光上线稳定（EN7572 稳态判定）、LOID 补零方向切换（如 OLT 需要）。
@@ -160,3 +207,7 @@ bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会�
 - [ ] 用户侧编译+实机验收（PON 修复此前从未进过 CI 产物，本轮是第一次真正落地，编译验证不可省）
 - [x] flow_offloading_hw 出厂已默认开启（核查确认，无需改动）；改为验收硬件是否真的接受卸载
 - [x] cpufreq 包不启用（用户拍板）；845413a386 撤掉后由 54fb4465eb 恢复档位，因包未选入仍是死代码，保留不动
+- [x] 2026-11-16 修复 932 编译错误（`8889a4e91b`，bugfix，未推送）：只换取 VLAN 的写法 + 重算 hunk 行数，
+      未动 932 的查口机制，范围严格限定在「让 bugfix 编过」。
+- [ ] 2026-11-16 新发现待拍板：932 的 `br_fdb_find_port()` 在无 RTNL 的卸载 workqueue 上会触发
+      `ASSERT_RTNL()` 一次 WARN，并有 slave netdev 窄窗口竞态；是否改走 `dev_fill_forward_path()` 见四·2。
