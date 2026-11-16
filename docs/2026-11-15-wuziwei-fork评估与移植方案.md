@@ -165,12 +165,31 @@ squeezelite-custom）是 feed 既有噪声：紧随其后 7474 行 `# configurat
 
 校验：`tmp/verify-patch-hunks.py` 逐 hunk 比对声明与实际行数、并核跨 hunk 累计偏移，
 925 / 931 / 932 / 133 共 4 补丁 27 hunk **0 失败**；932 暂存 blob CR=0、`i/lf w/lf attr/text eol=lf`。
-本机无 C 编译器与内核树，**未做编译实测**，编译验证仍须用户侧执行（见四·1）。
+
+WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde/workdir/ponwrt`）：
+该检出在 `AN7581-GPON` 分支、内核 6.18.55（bugfix 是 6.18.60），且 608 补丁有用户未提交改动，
+故**不切分支、不动源码树**，只在其已打满补丁的 `build_dir/…/linux-6.18.55` 上做单文件对照：
+- 真实头文件核到 `airoha_eth.h:516` 的 `vlan = { hdr[2]{id,proto}; num }`；925 的同款表达式在该树 `airoha_ppe.c:390` 已编过。
+- `patch --dry-run --fuzz=0` 应用 932：两个 hunk 全中，仅偏移 -37 行（该分支无 931）。
+- 取 `.airoha_ppe.o.cmd` 里的原始编译命令（gcc-14.4.0_musl / aarch64），源文件换成 tmp 副本、
+  输出与 dep 文件重定向到 tmp，旧/新各编一次：
+  **旧 932 → 复现 CI 同一错误** `'struct <anonymous>' has no member named 'id'`（负对照成立，证明测试有效）；
+  **修复后 932 → COMPILE OK**，产物 `new.o` 284848 字节、`ELF 64-bit ARM aarch64 relocatable`，
+  `nm` 里有 `br_fdb_find_port` 引用（说明 CONFIG_BRIDGE 分支真编进去了）。
+- 全程只写容器内 `/home/opde/tmp-932`（测后已删），源码树 `git status` 与测前逐字相同；
+  脚本留档 `tmp/wsl-932-compile-test.sh`，两份补丁 md5 传输前后一致。
+
+覆盖边界：这是**单翻译单元**编译，不是 bugfix 整内核/整镜像构建。bugfix 侧 932 能应用、
+且整个 TU 只有这一个错，由 CI 日志本身证明（第三次重试只重编 airoha_ppe.o）。
+整镜像与实机验收仍须用户侧执行（见四·1）。
 
 ## 四、风险与验收
 
-- 931/932 未经 fork CI 真正编译——**932 已证实**（11-16 首次 CI 即编译失败，见三·追加），931 仍未验证。
-  必须我们自建验证：WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
+- 931/932 未经 fork CI 真正编译——**932 已证实**（11-16 首次 CI 即编译失败，见三·追加）。
+  932 修复后已在 WSL 做单翻译单元对照编译通过（负对照复现原错误），但**整内核/整镜像仍未构建**；
+  931 连单文件验证都还没做。仍须：WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
+  环境注意：容器 `opde-builder` 现有检出在 `AN7581-GPON`、内核 6.18.55，且 608 补丁有用户未提交改动，
+  验 bugfix 要另开 worktree 或先保住现场，**不能直接 checkout 覆盖**。
 - **未修，待拍板：932 调 `br_fdb_find_port()` 会踩 RTNL 断言。**
   上游 v6.18 `net/bridge/br_fdb.c` 的 `br_fdb_find_port()` 首行是 `ASSERT_RTNL()`，
   而 `include/linux/rtnetlink.h` 里它是无条件的 `WARN_ONCE(!rtnl_is_locked(), …)`
