@@ -24,7 +24,7 @@
 | 项 | 内容 | 证据 |
 |---|---|---|
 | 931-net-airoha-fix-wan-ipv6-pppoe-flow-offload.patch | PPE 四缺陷：路由 IPv6 误落 L2 黑洞、PPPoE session ID 被清、IPv6 条目 NPU 计数 stall、MTU 未留 PPPoE+VLAN 16 字节余量 | 上下文注释出自我们 930 补丁（930:69），基线吻合；hunk4 行数已修正 |
-| 932-net-airoha-ppe-support-bridge-fdb-port-offload.patch | br-lan egress 经 br_fdb_find_port 解析桥从口，WAN→LAN 才能硬件卸载；FDB 未学习安全回退 CPU | fork 称 88% 下行此前走 CPU；CONFIG_BRIDGE 门控写法正确 |
+| 932-net-airoha-ppe-support-bridge-fdb-port-offload.patch | br-lan egress 经 `dev_fill_forward_path()`（RCU 内 `dev_hold` + `__free(dev_put)`）解析桥从口，WAN→LAN 才能硬件卸载；FDB 未学习安全回退 CPU | fork 称 88% 下行此前走 CPU；查口已由 `br_fdb_find_port` 重写为完整修复（四·2），消除 RTNL WARN 与 slave UAF 竞态 |
 | 133-rpcd-async-scan.patch | WiFi 扫描 fork 子进程+ubus 延迟应答+30s 超时，不阻塞 rpcd 事件 loop | 天然兼容：有线目标不触发扫描；rpcd 源码构建期拉取，需编译验证 |
 
 适用前提：931/932 只在 flow_offloading_hw=1 时生效。核查结论：该值出厂已默认为 1，两个分支都是，
@@ -198,17 +198,19 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
   bugfix 的 932 与源**同机制**，逐字 diff 仅格式差（我们把 vlan 那行拆成两行、hunk `+465,27` vs 源 `+465,26`）。
   故 `ASSERT_RTNL` 一次 WARN 与 slave netdev 窄窗口竞态（四·2）是**从源原样带来**，非移植引入；
   源作者要么没意识到、要么默认接受那次 WARN。选「接受 WARN 先验收」=与源行为一致；
-  选 `dev_fill_forward_path()`=超出源所做的修复。
+  选 `dev_fill_forward_path()`=超出源所做的修复。**2026-11-16 用户拍板「做完整修复吧」，已实施③（见四·2），
+  即 bugfix 的 932 查口机制现已优于来源仓库。**
 
 ## 四、风险与验收
 
 - 931/932 未经 fork CI 真正编译——**932 已证实**（11-16 首次 CI 即编译失败，见三·追加）。
-  932 修复后已在 WSL 做单翻译单元对照编译通过（负对照复现原错误），但**整内核/整镜像仍未构建**；
+  932 的 **vlan.id 编译修复**（`8889a4e91b`）已在 WSL 做单翻译单元对照编译通过（负对照复现原错误）；
+  但 11-16 后续的 **③查口重写（`dev_fill_forward_path`）尚未做任何编译验证**，且**整内核/整镜像仍未构建**；
   931 连单文件验证都还没做。仍须：WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
   环境注意：容器 `opde-builder` 现有检出在 `AN7581-GPON`、内核 6.18.55，且 608 补丁有用户未提交改动，
   验 bugfix 要另开 worktree 或先保住现场，**不能直接 checkout 覆盖**。
-- **未修，待拍板：932 调 `br_fdb_find_port()` 会踩 RTNL 断言。**
-  上游 v6.18 `net/bridge/br_fdb.c` 的 `br_fdb_find_port()` 首行是 `ASSERT_RTNL()`，
+- **已修（2026-11-16 用户拍板「做完整修复吧」，走候选③）：932 查口由 `br_fdb_find_port()` 重写为 `dev_fill_forward_path()`。**
+  原缺陷：上游 v6.18 `net/bridge/br_fdb.c` 的 `br_fdb_find_port()` 首行是 `ASSERT_RTNL()`，
   而 `include/linux/rtnetlink.h` 里它是无条件的 `WARN_ONCE(!rtnl_is_locked(), …)`
   （不受 CONFIG_PROVE_LOCKING 影响；本内核 PROVE_LOCKING 与 DEBUG_LOCK_ALLOC 均 not set）。
   调用链 `flow_offload_work_handler`（workqueue）→ `nf_flow_offload_tuple` →
@@ -216,14 +218,30 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
   `airoha_ppe_foe_entry_prepare`，全程只另有 `down_read(&flowtable->flow_block_lock)`，没有 RTNL；
   本仓库 915-01 对 `nf_flow_table_offload.c` 只加 DSCP dissector，不改锁。
   `rtnl_is_locked()` 是 `mutex_is_locked(&rtnl_mutex)`（看全局有无持锁者，不是当前任务），
-  所以后果是**概率性一次 WARN splat**，不是 panic；查表本身 RCU 安全（函数内部自取 rcu_read_lock）。
-  真实隐患：返回的 slave netdev 在 rcu_read_unlock 之后使用且未 dev_hold，
-  WiFi AP 口（phy0-ap0）随 wifi down/换信道 unregister 时有窄窗口竞态。
-  候选：①先接受 WARN 与窄竞态跑验收；②桥分支里包 `rtnl_lock()`——TC flower 路径是 RTNL→flow_offload_mutex，
-  反向取锁有 AB-BA 死锁风险，不建议；③**推荐**：改用本驱动已在用的 `dev_fill_forward_path()`
-  （706-01 的 `net/core/dev.c` hunk 全文无 RTNL 断言，`airoha_ppe_get_wdma_info` 就在 `rcu_read_lock()` 下调用它；
-  桥侧 `br_fill_forward_path` 走 `br_fdb_find_rcu`/`br_port_get_rcu`，见 675-05:55），
-  属重写 932 的查口机制，需另开一轮并重新编译验证。
+  所以后果是**概率性一次 WARN splat**，不是 panic；真实隐患是返回的 slave netdev 在 rcu_read_unlock
+  之后使用且未 dev_hold，WiFi AP 口（phy0-ap0）随 wifi down/换信道 unregister 时有窄窗口 UAF 竞态。
+  候选②（桥分支包 `rtnl_lock()`）因 TC flower 路径是 RTNL→flow_offload_mutex、反向取锁有 AB-BA 死锁风险，否决。
+  **③实现（重写后 932，2 hunk：`-4,6 +4,7` 加 `#include <linux/cleanup.h>`；`-462,11 +463,32` 改查口）：**
+  桥 master 时在 `rcu_read_lock()` 内调 `dev_fill_forward_path(netdev, data->eth.h_dest, &stack)`，
+  校验 `num_paths>=2 && path[0].type==DEV_PATH_BRIDGE` 后取 `path[1].dev` 为 slave，`dev_hold()` 增引用，
+  出 RCU 段后 `netdev = slave_dev`；slave 声明为 `struct net_device *slave_dev __free(dev_put) = NULL`，
+  函数所有返回路径自动 `dev_put()`（`DEFINE_FREE(dev_put)` 见 netdevice.h:4441，NULL 安全），杜绝泄漏与 UAF。
+  **逐字回读 v6.18 源码核实（证据在 tmp/）：**
+  ① `net/core/dev.c:734` `dev_fill_forward_path` 全文**无 ASSERT_RTNL**，且**自身不取 rcu_read_lock**
+  （只循环调 `ndo_fill_forward_path`）→ RCU 保护必须由调用方提供，我们的外层 `rcu_read_lock()` 是必需而非冗余；
+  ② `net/bridge/br_device.c:385` `br_fill_forward_path` 用 `br_fdb_find_rcu`（RCU 安全、无 RTNL 断言），
+  FDB 未命中（`!f`）返回 -1 → `dev_fill_forward_path` 返回 -1 → slave 保持 NULL → netdev 仍是桥 master →
+  下游 `airoha_is_valid_gdm_dev` 拒绝 → -EINVAL → 安全回退 CPU 软件路由（与提交说明一致）；
+  命中时 `path->type=DEV_PATH_BRIDGE`、`path->dev=dst->br->dev`（master）、`ctx->dev=dst->dev`（slave）；
+  ③ 第二跳 `path[1].dev` 即 slave：DSA `dsa_user_fill_forward_path`（user.c:2547）`path->dev=ctx->dev`、
+  mt76 `mt7915_net_fill_forward_path`（main.c:1717）`path->dev=ctx->dev` 后置 `ctx->dev=NULL`、
+  普通以太 slave 无 `ndo_fill_forward_path` 时由 dev.c:767 收尾 `DEV_PATH_ETHERNET` 元素 `path->dev=ctx.dev`，三者一致；
+  ④ 下游 `*egress_dev` 存的是 `netdev_priv(netdev)` 经 `airoha_get_dsa_port` 归一后的**稳定 conduit gdm_dev**，
+  不是 transient slave，故 slave 在函数返回时 `dev_put` 不影响长期持有的 `e->egress_dev`（925 的 remove_egress_flows 仍安全）。
+  **语义差（验收项）：** 原 932 按报文最外层 VLAN tag 查 FDB（vid=0 兜底）；③ 经 `br_vlan_fill_forward_path_pvid`
+  按桥 **PVID** 查。对未开 VLAN filtering 的 br-lan（典型）二者等价；VLAN-filtered 桥/WiFi 多 VLAN 场景须实机验收。
+  校验：`tmp/verify-patch-hunks.py` 2 hunk 0 失败、累积偏移正确（463=462+1）、CR=0/LF、17 新增代码行全真 tab、
+  old-side 与 CI 已应用基线逐字一致（生成器 `tmp/gen-932.py` 内 difflib 重建断言）。**整内核/整镜像与实机仍待用户侧编译验收。**
 - 运行时验收：出厂已默认开启 flow_offloading_hw，先确认 fw4 未打 Hardware flow offloading unavailable 回退 warn，再验 IPv6 吞吐/连通、PPPoE session 稳定（如适用）、
   BT 多连接 CPU/softirq 与 CDM 计数、长时间无 NPU stall；WiFi 机型另验扫描不卡 LuCI。
 - PON 补丁验收：冷启动出光上线稳定（EN7572 稳态判定）、LOID 补零方向切换（如 OLT 需要）。
@@ -234,6 +252,7 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
 - 2026-11-15 用户拍板：本仓库支持多设备，有用的补丁都纳入，用新分支维护；主题面板不要。
 - 2026-11-15 分支策略定案：master 保持不动（上游变动由用户自行合入），只维护一条 bug 修复分支；不按 WiFi 拆源码分支（两类默认配置/服务无分歧，WiFi 纯 device-profile 配置轴）。否决了"master 基准镜像+集成分支"重构方案。例外：2026-11-15 接受 files/ 迁移与配套 .gitignore/.gitattributes 改动进 master（overlay 所有权归一），修复本身仍只在 bugfix。
 - 2026-11-15 分支改名 port/wuziwei-fixes → bugfix（通用名，后续修复都进这里）。
+- 2026-11-16 用户拍板「做完整修复吧」：932 的 RTNL 断言 + slave UAF 竞态走候选③完整修复（`dev_fill_forward_path` + RCU 内 `dev_hold` + `__free(dev_put)`），不接受「先带 WARN 验收」，也不走有 AB-BA 死锁风险的候选②。重写后 932 查口机制优于来源仓库；整内核/整镜像与实机验收仍待用户侧。
 - 2026-11-15 tempinfo 保留；cpuinfo 把 airoha 加进温度跳过名单，架构行去掉重复 CPU 温度（提交 30958fb44f）。cpufreq 档位 845413a386 撤掉后由 54fb4465eb 恢复，包未选入仍是死代码，用户拍板不启用、保留不动。**2026-11-16 用户明确「cpufreq 留」，本会话「撤」与编译会话 revert 的冲突就此定案：保留恢复后的档位，不启用该包。**
 - 已实施：A+B 落盘并校验，提交于 bugfix（7eeb396c58 移植 + 30958fb44f 架构行去温度 + 845413a386 撤 cpufreq + 54fb4465eb 恢复 cpufreq 档位）。
 - 2026-11-15 用户点名授权「把所有改动提交推送」，本轮全部提交已推送（此前各轮均为用户自行推送）。
@@ -245,5 +264,6 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
 - [x] cpufreq 包不启用（用户拍板）；845413a386 撤掉后由 54fb4465eb 恢复档位，因包未选入仍是死代码，保留不动
 - [x] 2026-11-16 修复 932 编译错误（`8889a4e91b`，bugfix，未推送）：只换取 VLAN 的写法 + 重算 hunk 行数，
       未动 932 的查口机制，范围严格限定在「让 bugfix 编过」。
-- [ ] 2026-11-16 新发现待拍板：932 的 `br_fdb_find_port()` 在无 RTNL 的卸载 workqueue 上会触发
-      `ASSERT_RTNL()` 一次 WARN，并有 slave netdev 窄窗口竞态；是否改走 `dev_fill_forward_path()` 见四·2。
+- [x] 2026-11-16 用户拍板「做完整修复吧」：932 查口由 `br_fdb_find_port()` 重写为 `dev_fill_forward_path()`
+      （RCU 内 `dev_hold` + `__free(dev_put)`），消除 `ASSERT_RTNL()` 一次 WARN 与 slave netdev UAF 竞态；
+      2 hunk 校验 0 失败、CR=0、old-side 逐字保留，已提交 bugfix（未推送）。详见四·2。整内核/整镜像与实机待用户侧验收。
