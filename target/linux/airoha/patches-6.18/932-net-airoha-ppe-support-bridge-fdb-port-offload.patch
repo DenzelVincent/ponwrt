@@ -38,7 +38,7 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
  #include <linux/airoha-eth.h>
  #include <linux/ip.h>
  #include <linux/ipv6.h>
-@@ -462,11 +465,26 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -462,11 +465,27 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  					struct airoha_gdm_dev **egress_dev)
  {
  	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
@@ -52,7 +52,8 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
 +#if IS_ENABLED(CONFIG_BRIDGE)
 +	if (netdev && netif_is_bridge_master(netdev)) {
 +		struct net_device *slave_dev;
-+		u16 vid = data->vlan.num ? data->vlan.id : 0;
++		u16 vid = data->vlan.num ?
++			data->vlan.hdr[data->vlan.num - 1].id : 0;
 +
 +		slave_dev = br_fdb_find_port(netdev, data->eth.h_dest, vid);
 +		if (!slave_dev && vid)
