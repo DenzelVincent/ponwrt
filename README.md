@@ -55,10 +55,8 @@ cd ponwrt
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-#  第三方插件：lucky 已作为 feed 固定提交（见 feeds.conf.default 的 lucky 行），由上面两步自动安装
-#  仅配置 A 需要再克隆 airoha-npu：仓库根目录直接放 Makefile，不是 feed 格式，缺了会被静默跳过、不报错
-#  顺序要求：必须在 feeds install 之后执行（此时 luci-base 等 feed 包已就位，插件依赖才能被解析）
-git clone --depth 1 https://github.com/DenzelVincent/luci-app-airoha-npu.git package/luci-app-airoha-npu
+#  第三方插件：airoha-npu 已作为 feed（见 feeds.conf.default 的 airoha_npu 行），由上面两步自动安装，无需手动克隆
+#  lucky / mosdns 不在本仓库 feeds.conf.default 内，由云编译仓库的脚本追加；本地编译需要时按同样格式自行补
 
 #  选择配置（A / B 二选一；两者都已默认选中 kmod-airoha-xpon / kmod-airoha-pon-frontend /
 #  luci-app-pon / airoha-ponctl·pond·pon-debug，不用再进 menuconfig）
