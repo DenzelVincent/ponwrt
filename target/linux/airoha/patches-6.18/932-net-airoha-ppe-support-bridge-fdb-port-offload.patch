@@ -49,13 +49,14 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
  					struct airoha_gdm_dev **egress_dev)
  {
  	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
- 	u32 pon_tag = 0;
+-	u32 pon_tag = 0;
 -	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
-+	int wlan_etype = -EINVAL, dsa_port;
  	struct airoha_foe_mac_info_common *l2;
++	int wlan_etype = -EINVAL, dsa_port;
++	u32 pon_tag = 0;
  	u8 smac_id = 0xf;
-+	struct net_device *slave_dev __free(dev_put) = NULL;
  
++	struct net_device *slave_dev __free(dev_put) = NULL;
 +#if IS_ENABLED(CONFIG_BRIDGE)
 +	if (netdev && netif_is_bridge_master(netdev)) {
 +		struct net_device_path_stack stack = {};

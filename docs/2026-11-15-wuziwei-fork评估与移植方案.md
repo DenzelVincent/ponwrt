@@ -183,6 +183,25 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
 且整个 TU 只有这一个错，由 CI 日志本身证明（第三次重试只重编 airoha_ppe.o）。
 整镜像与实机验收仍须用户侧执行（见四·1）。
 
+WSL 单翻译单元实测（2026-11-16，③查口重写后，容器 `opde-builder`，同一 6.18.55 基线）：
+- 头文件预检全过：`netdevice.h` 有 `DEFINE_FREE(dev_put)`、`dev_fill_forward_path` 声明、`DEV_PATH_BRIDGE`、
+  `net_device_path_stack`，`include/linux/cleanup.h` 存在（6.18.55 即具备，6.18.60 同源稳定）。
+- **关键发现：fuzz 上下文分布。** 首版重写把 `pon_tag` 当上下文行（leading context 4 行），
+  `patch --fuzz=0` 报 `Hunk #2 FAILED`、仅 `--fuzz=2` 以 fuzz 1 过；而旧 932（`pon_tag` 作删除行、
+  leading context 3 行）`--fuzz=0` 直接过。两版 old-side 逐字节 `diff` 为 IDENTICAL，
+  差异纯在 ctx/del 分布改变 GNU patch Plan A 匹配。quilt 按 fuzz=0 应用，故首版会在 CI 炸。
+- **修正：外科式重写**（`tmp/gen-932.py`）——以旧 932 hunk2 body 为模板，声明部分 ctx/del/add 分布逐字保留
+  （`pon_tag` 仍作删+重加、leading context 仍 3 行），只替换桥 block 的 ADD 行并插入 `slave_dev __free(dev_put)` 声明。
+  断言 `oldside(新)==oldside(旧)` 且 `leading_ctx==3`。
+- 修正版实测：`patch --fuzz=0 --dry-run` 与真实应用均 `Hunk #2 succeeded at 426 (offset -37)`、退出码 0；
+  **COMPILE OK**，`new.o` 290104 字节 `ELF 64-bit ARM aarch64 relocatable`；`nm` 有 `U dev_fill_forward_path`
+  （桥分支真编进去并引用该符号；`dev_hold/dev_put` 为 static inline 故无外部符号）；
+  `br_fdb_find_port` 残留 0、`__free(dev_put)`×1、`dev_fill_forward_path`×2（含基线 `get_wdma_info` 原有 1 处）。
+- 全程只写容器 `/home/opde/tmp-932b`，基线 `airoha_ppe.c` md5 测前测后一致（`f71d4d4a…`），
+  源码树 `git status` 仍只有用户原有 608 改动 + 2 untracked，**检出现场未触碰**；补丁 md5 传输前后一致（`e49a7059…`）。
+- 覆盖边界：仍是**单翻译单元 + 6.18.55 头文件**（非 bugfix 6.18.60），offset -37 因该 GPON 基线无 931；
+  bugfix 侧 old-side 取自 CI 已应用基线，上下文吻合。**整内核（quilt 全补丁序列）/整镜像/实机仍待用户侧**。
+
 ### 追加：来源仓库（wuziwei）同类问题交叉核查（2026-11-16）
 
 应用户要求核对补丁来源仓库是否带同样问题，拉取 wuziwei 线上最新补丁比对：
@@ -205,7 +224,7 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
 
 - 931/932 未经 fork CI 真正编译——**932 已证实**（11-16 首次 CI 即编译失败，见三·追加）。
   932 的 **vlan.id 编译修复**（`8889a4e91b`）已在 WSL 做单翻译单元对照编译通过（负对照复现原错误）；
-  但 11-16 后续的 **③查口重写（`dev_fill_forward_path`）尚未做任何编译验证**，且**整内核/整镜像仍未构建**；
+  但 11-16 后续的 **③查口重写（`dev_fill_forward_path`）已过 WSL 单翻译单元 fuzz=0 应用 + 编译**（6.18.55 头文件代理，见三·追加），**整内核/整镜像仍未构建**；
   931 连单文件验证都还没做。仍须：WSL 容器先单包编译内核（quilt 应用全部补丁），再整镜像；命令单行由用户执行。
   环境注意：容器 `opde-builder` 现有检出在 `AN7581-GPON`、内核 6.18.55，且 608 补丁有用户未提交改动，
   验 bugfix 要另开 worktree 或先保住现场，**不能直接 checkout 覆盖**。
@@ -240,8 +259,10 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
   不是 transient slave，故 slave 在函数返回时 `dev_put` 不影响长期持有的 `e->egress_dev`（925 的 remove_egress_flows 仍安全）。
   **语义差（验收项）：** 原 932 按报文最外层 VLAN tag 查 FDB（vid=0 兜底）；③ 经 `br_vlan_fill_forward_path_pvid`
   按桥 **PVID** 查。对未开 VLAN filtering 的 br-lan（典型）二者等价；VLAN-filtered 桥/WiFi 多 VLAN 场景须实机验收。
-  校验：`tmp/verify-patch-hunks.py` 2 hunk 0 失败、累积偏移正确（463=462+1）、CR=0/LF、17 新增代码行全真 tab、
-  old-side 与 CI 已应用基线逐字一致（生成器 `tmp/gen-932.py` 内 difflib 重建断言）。**整内核/整镜像与实机仍待用户侧编译验收。**
+  校验：`tmp/verify-patch-hunks.py` 2 hunk 0 失败、累积偏移正确（463=462+1）、CR=0/LF、新增代码行全真 tab、
+  old-side 与 CI 已应用基线逐字一致（生成器 `tmp/gen-932.py` 外科式替换 + `oldside`/`leading_ctx==3` 断言）。
+  **WSL 单翻译单元实测过**：`patch --fuzz=0` 应用成功（offset -37）、COMPILE OK、`nm` 有 `U dev_fill_forward_path`（见三·追加）。
+  **整内核（quilt 全序列）/整镜像/实机仍待用户侧编译验收。**
 - 运行时验收：出厂已默认开启 flow_offloading_hw，先确认 fw4 未打 Hardware flow offloading unavailable 回退 warn，再验 IPv6 吞吐/连通、PPPoE session 稳定（如适用）、
   BT 多连接 CPU/softirq 与 CDM 计数、长时间无 NPU stall；WiFi 机型另验扫描不卡 LuCI。
 - PON 补丁验收：冷启动出光上线稳定（EN7572 稳态判定）、LOID 补零方向切换（如 OLT 需要）。
@@ -265,5 +286,7 @@ WSL 对照编译实测（2026-11-16，容器 `opde-builder`，源码 `/home/opde
 - [x] 2026-11-16 修复 932 编译错误（`8889a4e91b`，bugfix，未推送）：只换取 VLAN 的写法 + 重算 hunk 行数，
       未动 932 的查口机制，范围严格限定在「让 bugfix 编过」。
 - [x] 2026-11-16 用户拍板「做完整修复吧」：932 查口由 `br_fdb_find_port()` 重写为 `dev_fill_forward_path()`
-      （RCU 内 `dev_hold` + `__free(dev_put)`），消除 `ASSERT_RTNL()` 一次 WARN 与 slave netdev UAF 竞态；
-      2 hunk 校验 0 失败、CR=0、old-side 逐字保留，已提交 bugfix（未推送）。详见四·2。整内核/整镜像与实机待用户侧验收。
+      （RCU 内 `dev_hold` + `__free(dev_put)`），消除 `ASSERT_RTNL()` 一次 WARN 与 slave netdev UAF 竞态。
+      首版 `2e953d4cd1` 已推送 origin/bugfix；WSL 单翻译单元实测发现首版 `pon_tag` 作上下文致 `--fuzz=0` 失败（quilt 会炸），
+      外科式修正 hunk2 上下文分布（继承旧 932 已验证结构）后续提交修正版：`--fuzz=0` 应用成功 + COMPILE OK + `nm` 有 `U dev_fill_forward_path`。
+      详见三·追加与四·2。整内核（quilt 全序列）/整镜像/实机待用户侧验收。
