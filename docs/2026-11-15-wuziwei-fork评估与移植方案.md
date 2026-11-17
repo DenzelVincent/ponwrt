@@ -42,7 +42,7 @@ warn "Hardware flow offloading unavailable, falling back to software offloading"
 | 项 | 内容 |
 |---|---|
 | an7581-fiberhome-hg5585f-ct.dts | 电信版硬件仅 USB 2.0，usb0 锁定 USB2 PHY；写法与 common dtsi 的 usb1 既有锁定一致，usb0_phy 标签已核实（an7581.dtsi:608） |
-| pin-wifi-cpus.sh + 99-wifi-affinity | mt76 线程亲和打散；原版硬编码 4 核掩码，已改写为 nproc 自适应（tx 绑末核、napi 轮转其余核，掩码按 %x 输出避免 taskset 十六进制误读）；hotplug 仅 phy*-ap0 add 触发，有线天然不生效 |
+| pin-wifi-cpus.sh + 99-wifi-affinity | mt76 线程亲和打散；原版硬编码 4 核掩码，已改写为 nproc 自适应（tx 绑末核、napi 轮转其余核，掩码按 %x 输出避免 taskset 十六进制误读）；hotplug 仅 phy*-ap0 add 触发，有线天然不生效。**2026-11-17 合上游后删除，改采上游 mt7916 专用亲和（见五·2026-11-17）** |
 | autocore Makefile 加 airoha% + cpuinfo 跳过 airoha 温度 | 装 tempinfo 后概览页多一行独立"温度"（CPU+WiFi，WiFi 温度是架构行没有的新信息）；同时把 airoha 加进 cpuinfo 温度跳过名单（沿用 ipq/mediatek/qualcommax 既有设计），架构行不再重复显示 CPU 温度、只留频率。用户拍板 tempinfo 保留 |
 | cpufreq.uci 加 airoha 档（845413a386 撤掉后由 54fb4465eb 恢复） | ondemand 500M-1.2G/10/50。编译仓库 an7581.config 未启用 CONFIG_PACKAGE_cpufreq，包 DEPENDS:=@(arm\|\|aarch64) 无 DEFAULT_y，defconfig 仍 not set，故档位在产出固件里仍是死代码。用户拍板不启用该包，恢复的提交保留不动 |
 
@@ -98,7 +98,7 @@ bugfix 固件内置的是修好且 PKG_RELEASE 已 bump 的版本，apk 不会�
 - target/linux/airoha/patches-6.18/931-…、932-…
 - package/system/rpcd/patches/133-rpcd-async-scan.patch
 - ~~patches/01-…、02-… + scripts/apply-pon-feed-patches.sh~~（方案已废并删除：改走 feed fork 真实提交，见二·C）
-- files/usr/sbin/pin-wifi-cpus.sh、files/etc/hotplug.d/net/99-wifi-affinity
+- ~~files/usr/sbin/pin-wifi-cpus.sh、files/etc/hotplug.d/net/99-wifi-affinity~~（2026-11-17 删除：上游已收编为 HG5585F 专用 mt7916 亲和实现，见五）
 - .gitignore（放开 /files 以纳入 overlay；加 PON 凭据/备份隐私忽略规则）
 - package/emortal/autocore/Makefile、package/emortal/autocore/files/cpuinfo；cpufreq 档位在 package/emortal/cpufreq/files/cpufreq.uci（原记录误写成 autocore 下）
 - target/linux/airoha/dts/an7581-fiberhome-hg5585f-ct.dts
@@ -290,3 +290,10 @@ WSL 单翻译单元实测（2026-11-16，③查口重写后，容器 `opde-build
       首版 `2e953d4cd1` 已推送 origin/bugfix；WSL 单翻译单元实测发现首版 `pon_tag` 作上下文致 `--fuzz=0` 失败（quilt 会炸），
       外科式修正 hunk2 上下文分布（继承旧 932 已验证结构）后续提交修正版：`--fuzz=0` 应用成功 + COMPILE OK + `nm` 有 `U dev_fill_forward_path`。
       详见三·追加与四·2。整内核（quilt 全序列）/整镜像/实机待用户侧验收。
+- 2026-11-17 合上游 2026-11-16 快照（upstream f6977f2947，master 侧已由用户合好）进 bugfix（合并提交 `3eda1b7b89`）：
+  - 上游新增：AN4475-G2 机型、RTL8221B LED 初始化、HG5585F MT7916 TX/NAPI 亲和与关闭 packet_steering、镜像/板级脚本刷新；这些文件 bugfix 侧此前的移植无同名改动，合并即取上游。
+  - 唯一文本冲突 `feeds.conf.default`：保留 fork 钉 sha 结构，pin 更新为 drivers `c4a8372674bc…`、userspace `6b03787b991e…`。
+  - 用户拍板 ONU SN：CTC leaf 0xc7/0x0001 改采上游 8 字节（优先驱动 `active_serial_number`，否则 vendor_id + MAC 后 4 字节；上游实测华为 OLT 过认证），本地 `onu_sn()` 保留为“线上一字节源”供 LuCI 与控制页共用，展示随之为 8 字节。
+  - 用户拍板 WiFi 亲和：删本地通用 overlay（`pin-wifi-cpus.sh`、`99-wifi-affinity`），改采上游 HG5585F 专用实现；非 fiberhome 机型不再有 WiFi 线程绑定。
+  - 两 fork 合并：drivers 吸收上游 `arm_tx`（-EAGAIN 时重 prepare 光前端），移除上游 `tests/pon-recovery`（用例按已被本地重构替换的 `recover_tx` 旧流程编写，合并树无法构建），`PKG_RELEASE` 取 72；userspace 吸收 `active_serial_number` 读取链，保留 LOID 补零方向、报文展示与 pon-reopen。
+  - 待办：三仓库推送（两 fork 新提交 + bugfix）；WSL 重编验证（内核 quilt 全序列含 931/932 与新 762 补丁）；实机验收。
