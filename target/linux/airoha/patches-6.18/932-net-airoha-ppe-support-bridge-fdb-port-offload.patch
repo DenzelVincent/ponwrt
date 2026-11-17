@@ -45,7 +45,7 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
  #include <linux/airoha-eth.h>
  #include <linux/ip.h>
  #include <linux/ipv6.h>
-@@ -462,11 +463,32 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -430,11 +431,37 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
  					struct airoha_gdm_dev **egress_dev)
  {
  	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
@@ -60,9 +60,14 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
 +#if IS_ENABLED(CONFIG_BRIDGE)
 +	if (netdev && netif_is_bridge_master(netdev)) {
 +		struct net_device_path_stack stack = {};
++		struct net_device_path_ctx ctx = {
++			.dev = netdev,
++		};
++
++		memcpy(ctx.daddr, data->eth.h_dest, sizeof(ctx.daddr));
 +
 +		rcu_read_lock();
-+		if (!dev_fill_forward_path(netdev, data->eth.h_dest, &stack) &&
++		if (!dev_fill_forward_path(&ctx, &stack) &&
 +		    stack.num_paths >= 2 &&
 +		    stack.path[0].type == DEV_PATH_BRIDGE) {
 +			slave_dev = (struct net_device *)stack.path[1].dev;
