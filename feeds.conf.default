@@ -5,7 +5,7 @@ src-git telephony https://github.com/openwrt/telephony.git
 src-git video https://github.com/openwrt/video.git
 # PON 两 fork 以真实提交承载（上游最新 + 本地修复）并钉完整 sha（master 分支保持 pbs05 不钉）；带 ^ref 的 feed 不会再 update，换 pin 后本地须先删 feeds/pon_drivers 与 feeds/pon_userspace
 src-git pon_drivers https://github.com/DenzelVincent/openwrt-pon-drivers.git^c4a8372674bc3dce259d42b60ca8d2a2f8f81e99
-src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git^6b03787b991ec1c9da1fd6676c4584460cc30bd6
+src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git^75ab52c9cbe4cab69dc53d4a66e302523d4cbf7d
 # airoha-npu 自维护仓库，裸拉最新不锁 sha；仓库为 feed 形态（包体在子目录），根 Makefile 的旧提交已不可用
 src-git airoha_npu https://github.com/DenzelVincent/luci-app-airoha-npu.git
 #src-git targets https://github.com/openwrt/targets.git

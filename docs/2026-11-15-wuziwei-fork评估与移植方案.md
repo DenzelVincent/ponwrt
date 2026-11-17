@@ -292,7 +292,7 @@ WSL 单翻译单元实测（2026-11-16，③查口重写后，容器 `opde-build
       详见三·追加与四·2。整内核（quilt 全序列）/整镜像/实机待用户侧验收。
 - 2026-11-17 合上游 2026-11-16 快照（upstream f6977f2947，master 侧已由用户合好）进 bugfix（合并提交 `3eda1b7b89`）：
   - 上游新增：AN4475-G2 机型、RTL8221B LED 初始化、HG5585F MT7916 TX/NAPI 亲和与关闭 packet_steering、镜像/板级脚本刷新；这些文件 bugfix 侧此前的移植无同名改动，合并即取上游。
-  - 唯一文本冲突 `feeds.conf.default`：保留 fork 钉 sha 结构，pin 更新为 drivers `c4a8372674bc…`、userspace `6b03787b991e…`。
+  - 唯一文本冲突 `feeds.conf.default`：保留 fork 钉 sha 结构，pin 更新为 drivers `c4a8372674bc…`、userspace `75ab52c9cbe4…`（前者为合并提交，后者另含一处缩进修正）。
   - 用户拍板 ONU SN：CTC leaf 0xc7/0x0001 改采上游 8 字节（优先驱动 `active_serial_number`，否则 vendor_id + MAC 后 4 字节；上游实测华为 OLT 过认证），本地 `onu_sn()` 保留为“线上一字节源”供 LuCI 与控制页共用，展示随之为 8 字节。
   - 用户拍板 WiFi 亲和：删本地通用 overlay（`pin-wifi-cpus.sh`、`99-wifi-affinity`），改采上游 HG5585F 专用实现；非 fiberhome 机型不再有 WiFi 线程绑定。
   - 两 fork 合并：drivers 吸收上游 `arm_tx`（-EAGAIN 时重 prepare 光前端），移除上游 `tests/pon-recovery`（用例按已被本地重构替换的 `recover_tx` 旧流程编写，合并树无法构建），`PKG_RELEASE` 取 72；userspace 吸收 `active_serial_number` 读取链，保留 LOID 补零方向、报文展示与 pon-reopen。
