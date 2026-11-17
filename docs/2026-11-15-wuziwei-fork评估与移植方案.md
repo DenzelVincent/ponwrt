@@ -297,3 +297,20 @@ WSL 单翻译单元实测（2026-11-16，③查口重写后，容器 `opde-build
   - 用户拍板 WiFi 亲和：删本地通用 overlay（`pin-wifi-cpus.sh`、`99-wifi-affinity`），改采上游 HG5585F 专用实现；非 fiberhome 机型不再有 WiFi 线程绑定。
   - 两 fork 合并：drivers 吸收上游 `arm_tx`（-EAGAIN 时重 prepare 光前端），移除上游 `tests/pon-recovery`（用例按已被本地重构替换的 `recover_tx` 旧流程编写，合并树无法构建），`PKG_RELEASE` 取 72；userspace 吸收 `active_serial_number` 读取链，保留 LOID 补零方向、报文展示与 pon-reopen。
   - 待办：三仓库推送（两 fork 新提交 + bugfix）；WSL 重编验证（内核 quilt 全序列含 931/932 与新 762 补丁）；实机验收。
+
+### 追加：按修复项逐个合入 master（2026-11-17，已完成，未推送）
+
+用户拍板「按照修复项逐个合并至 master，提交时注释要详细点」。master（=origin/master `0a7b9c5eba`）上新增 6 个独立提交，文件均取自 bugfix 同路径（两分支对这些文件原本零差异，931/932/133 为 bugfix 新增件）：
+
+| 提交 | 内容 |
+|---|---|
+| `24896c0e23` | 931 IPv6/PPPoE offload 四缺陷（提交信息含代码级证据：`airoha_ppe.c:794` 无类型门、`:737` 整字段重写清 PPPOE_ID、`:346` 为 session ID 写入点、MTU 少 8 字节的算术） |
+| `4872ea2700` | 932 桥从口 offload（`dev_fill_forward_path` 版；说明桥 master 必被 `airoha_is_valid_gdm_port` 拒绝 → 有线桥出口此前全走 CPU，及否决 `br_fdb_find_port`/`rtnl_lock` 的理由） |
+| `eff0e7c099` | rpcd 133 异步扫描（注明 SIGKILL 超时后 AP 恢复待实机） |
+| `08e4ce8424` | HG5585F-CT usb0 锁 USB2 PHY |
+| `6f0c8f5823` | autocore tempinfo 装 airoha + cpuinfo 架构行去重复温度 |
+| `41b7eff144` | cpufreq airoha 档位（包未启用＝死代码） |
+
+提交前复核：931（6 hunk）/932（2）/133（2）声明行数校验 0 失败、CR=0；master 侧 762 只碰 `realtek_main.c`，915-01/920/925/930 四个前置补丁两分支 blob 逐字相同，故 931/932 的 old-side 上下文在 master 无风险。合并后 master 与 bugfix 的剩余差异只有 `feeds.conf.default` 与本文档，符合既定口径。
+
+待办：master 推送（待用户点名）；master 侧 WSL 全量构建（内核 quilt 全序列 + rpcd）；实机验收（IPv6/PPPoE、桥从口 offload 与 fw4 无 fallback warn、BT 多连接 CPU/CDM 计数、WiFi 扫描不卡且超时后 AP 可恢复、概览页温度行）。
