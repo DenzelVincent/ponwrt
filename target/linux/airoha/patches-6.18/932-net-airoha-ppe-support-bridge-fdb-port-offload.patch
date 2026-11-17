@@ -1,0 +1,87 @@
+From: Ziwei Wu <wuziwei518@gmail.com>
+Subject: [PATCH] net: airoha: support hardware flowtable offload for bridge slave ports
+
+In OpenWrt and common router environments, LAN interfaces (such as lan1-lan4
+and wireless AP interfaces) are aggregated under a virtual bridge device
+(e.g., br-lan).
+
+When the Netfilter flowtable attempts to offload routed traffic destined for
+a LAN host, the egress net_device presented to the hardware driver is the
+bridge master device (br-lan). Previously, airoha_ppe_foe_entry_prepare()
+validated the egress net_device via airoha_is_valid_gdm_dev(). Because the
+virtual bridge device is not a physical GDM device, the driver unconditionally
+rejected the hardware flow entry with -EINVAL.
+
+As a consequence, routed downlink traffic from WAN to LAN could never be
+hardware-offloaded into the PPE flow table, causing up to 88% of incoming
+traffic to fall back onto the CPU DMA path (CDM2 and heavy softirq load),
+leading to sustained high CPU load under multi-connection workloads like BitTorrent.
+
+Resolve the bridge slave port with dev_fill_forward_path() when netdev is a
+bridge master (netif_is_bridge_master). The first path element is the bridge
+hop (DEV_PATH_BRIDGE); the next element's dev is the real slave net_device
+(lan1 via DEV_PATH_DSA, or phy0-ap0 via DEV_PATH_MTK_WDMA) - both DSA and mt76
+set path->dev to ctx->dev. Substitute netdev with that slave before DSA port
+and GDM device validation. If the destination MAC is not yet in the bridge FDB,
+dev_fill_forward_path() fails and the flow safely falls back to CPU software
+routing until the bridge learns it.
+
+dev_fill_forward_path() runs under rcu_read_lock() and has no ASSERT_RTNL(),
+unlike br_fdb_find_port() which warns when called from the flow offload
+workqueue without RTNL. The resolved slave is reference-counted with dev_hold()
+inside the RCU read section and released automatically via __free(dev_put) on
+every return path, so the slave net_device cannot be freed while in use even
+if a wireless AP interface unregisters concurrently.
+
+Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -4,6 +4,7 @@
+  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
+  */
+ 
++#include <linux/cleanup.h>
+ #include <linux/airoha-eth.h>
+ #include <linux/ip.h>
+ #include <linux/ipv6.h>
+@@ -430,11 +431,37 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 					struct airoha_gdm_dev **egress_dev)
+ {
+ 	u32 qdata = FIELD_PREP(AIROHA_FOE_SHAPER_ID, 0x7f), ports_pad, val;
+-	u32 pon_tag = 0;
+-	int wlan_etype = -EINVAL, dsa_port = airoha_get_dsa_port(&netdev);
+ 	struct airoha_foe_mac_info_common *l2;
++	int wlan_etype = -EINVAL, dsa_port;
++	u32 pon_tag = 0;
+ 	u8 smac_id = 0xf;
+ 
++	struct net_device *slave_dev __free(dev_put) = NULL;
++#if IS_ENABLED(CONFIG_BRIDGE)
++	if (netdev && netif_is_bridge_master(netdev)) {
++		struct net_device_path_stack stack = {};
++		struct net_device_path_ctx ctx = {
++			.dev = netdev,
++		};
++
++		memcpy(ctx.daddr, data->eth.h_dest, sizeof(ctx.daddr));
++
++		rcu_read_lock();
++		if (!dev_fill_forward_path(&ctx, &stack) &&
++		    stack.num_paths >= 2 &&
++		    stack.path[0].type == DEV_PATH_BRIDGE) {
++			slave_dev = (struct net_device *)stack.path[1].dev;
++			if (slave_dev)
++				dev_hold(slave_dev);
++		}
++		rcu_read_unlock();
++
++		if (slave_dev)
++			netdev = slave_dev;
++	}
++#endif
++
++	dsa_port = airoha_get_dsa_port(&netdev);
+ 	memset(hwe, 0, sizeof(*hwe));
+ 	*egress_dev = NULL;
+ 
