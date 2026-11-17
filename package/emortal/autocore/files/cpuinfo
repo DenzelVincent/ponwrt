@@ -35,7 +35,8 @@ esac
 case "$DISTRIB_TARGET" in
 "bcm27xx"/*)
 	cpu_temp="$(vcgencmd measure_temp | awk -F '=' '{print $2}' | awk -F "'" '{print $1}')°C" ;;
-"ipq40xx"/*|"ipq806x"/*|"mediatek"/*|"qualcommax"/*) ;;
+# 这些平台装了 tempinfo, 温度由概览页独立"温度"行显示, cpuinfo 不再重复带温度
+"airoha"/*|"ipq40xx"/*|"ipq806x"/*|"mediatek"/*|"qualcommax"/*) ;;
 "x86"/*)
 	if [ -n "$(uci -q get "wechatpush.config.server_host")" ]; then
 		cpu_temp="$(/usr/share/wechatpush/wechatpush soc)°C"
