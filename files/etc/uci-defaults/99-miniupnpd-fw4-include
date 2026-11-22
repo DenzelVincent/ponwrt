@@ -1,0 +1,8 @@
+# 注册 fw4 include：每次防火墙重载后执行 /etc/firewall.miniupnpd 恢复 UPnP 映射
+uci -q batch <<-EOT
+	set firewall.miniupnpd_fw4=include
+	set firewall.miniupnpd_fw4.type='script'
+	set firewall.miniupnpd_fw4.path='/etc/firewall.miniupnpd'
+EOT
+uci commit firewall
+exit 0

@@ -1,0 +1,14 @@
+# fw4 每次 reload 都会重建 inet fw4 整表，miniupnpd 写入的映射规则随之丢失
+# （包自带的 upnp_* 跳转片段会保留，但链内规则为空），UPnP 端口映射实际失效、
+# LuCI UPnP 页显示为空。重载结束后重启 miniupnpd，由它从 lease 文件恢复全部映射。
+# 注: fw4 以 sh -c 方式 source 本文件且禁用 config()，这里不能调用 uci。
+# 开机时 fw4 先于 miniupnpd 启动，pidof 判断为否直接跳过，不影响正常启动顺序。
+
+pidof miniupnpd >/dev/null 2>&1 || exit 0
+
+(
+	sleep 1
+	/etc/init.d/miniupnpd restart
+) >/dev/null 2>&1 &
+
+exit 0
