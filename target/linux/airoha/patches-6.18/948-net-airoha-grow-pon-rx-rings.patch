@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PonWrt <noreply@localhost>
+Date: Fri, 28 Nov 2026 12:00:00 +0800
+Subject: [PATCH] net: airoha: grow PON RX rings within the memory budget
+
+Increase the PON rings 21..23 to 1024 descriptors and the CPU/control rings
+2/4/11/15 to 256. Keep the LRO rings 24..30 at 64 descriptors because each
+uses a 16 KiB page: applying the original 1024-descriptor candidate to them
+would add about 235.5 MiB on AN7581's two QDMAs.
+
+The selected profile adds about 24.3 MiB including RX buffers, descriptor
+memory and queue metadata. Raise the page pool to cover the largest ring.
+
+Source: pbs05/ponwrt issue #41 embedded diff.
+Link: https://github.com/pbs05/ponwrt/issues/41
+Signed-off-by: PonWrt <noreply@localhost>
+---
+ drivers/net/ethernet/airoha/airoha_eth.c | 2 +-
+ drivers/net/ethernet/airoha/airoha_eth.h | 7 ++++++-
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1182,7 +1182,7 @@
+ 				     struct airoha_qdma *qdma, int ndesc)
+ {
+ 	struct page_pool_params pp_params = {
+-		.pool_size = 256,
++		.pool_size = 1024,
+ 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+ 		.dma_dir = DMA_FROM_DEVICE,
+ 		.nid = NUMA_NO_NODE,
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -41,11 +41,12 @@
+ #define IRQ_QUEUE_LEN(_n)		((_n) ? 1024 : 2048)
+ #define TX_DSCP_NUM			1024
+ #define RX_DSCP_NUM(_n)			\
+-	((_n) ==  2 ? 128 :		\
+-	 (_n) ==  4 ? 128 :		\
+-	 (_n) == 11 ? 128 :		\
+-	 (_n) == 15 ? 128 :		\
+-	 (_n) ==  0 ? 1024 : 32)
++	((_n) ==  0 ? 1024 :		\
++	 (_n) >= 21 && (_n) <= 23 ? 1024 : \
++	 (_n) ==  2 ? 256 :		\
++	 (_n) ==  4 ? 256 :		\
++	 (_n) == 11 ? 256 :		\
++	 (_n) == 15 ? 256 : 64)
+ 
+ #define AIROHA_LRO_PAGE_ORDER		get_order(SZ_16K)
+ #define AIROHA_MAX_NUM_LRO_QUEUES	8
