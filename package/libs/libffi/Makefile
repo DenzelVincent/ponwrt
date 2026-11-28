@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libffi
 PKG_VERSION:=3.8.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/libffi/libffi/releases/download/v$(PKG_VERSION)
@@ -75,9 +75,15 @@ define Build/InstallDev
 	$(CP) \
 		$(PKG_INSTALL_DIR)/usr/include/*.h \
 		$(1)/usr/include/
-	$(CP) \
-		$(PKG_BUILD_DIR)/$(GNU_TARGET_NAME)*/fficonfig.h \
-		$(1)/usr/include/
+	# libffi 3.8 的 out-of-tree 构建不保证头文件仍在旧 tripl 目录。
+	f=$$(ls $(PKG_BUILD_DIR)/fficonfig.h 2>/dev/null || \
+		ls $(PKG_BUILD_DIR)/$(GNU_TARGET_NAME)*/fficonfig.h 2>/dev/null || \
+		find $(PKG_BUILD_DIR) -name fficonfig.h -print -quit); \
+	if [ -n "$$f" ]; then \
+		$(CP) "$$f" $(1)/usr/include/; \
+	else \
+		echo 'fficonfig.h not found' >&2; exit 1; \
+	fi
 endef
 
 define Package/libffi/install
