@@ -1,0 +1,41 @@
+#!/bin/sh
+
+case "${ACTION:-}" in
+	add|bind|ifup) dev="${DEVICENAME:-${INTERFACE:-}}" ;;
+	*) [ "$#" -eq 1 ] || exit 0; dev="$1" ;;
+esac
+
+case "$dev" in
+	pon0|eth0|eth1|lan*|br-lan|pppoe-wan) ;;
+	*) exit 0 ;;
+esac
+
+rps="$(uci -q get airoha_tune.tuning.rps_enabled 2>/dev/null || true)"
+rfs="$(uci -q get airoha_tune.tuning.rfs_enabled 2>/dev/null || true)"
+ppe="$(uci -q get airoha_tune.tuning.ppe_bind_rate_enabled 2>/dev/null || true)"
+[ "$rps" = 1 ] || rps=0
+[ "$rfs" = 1 ] || rfs=0
+[ "$ppe" = 1 ] || ppe=0
+
+# RFS 表由所有网卡共享，关闭时也必须回收全局表，不能只清单队列计数。
+[ "$rfs" = 1 ] && sysctl -w net.core.rps_sock_flow_entries=32768 >/dev/null 2>&1
+[ "$rfs" = 1 ] || sysctl -w net.core.rps_sock_flow_entries=0 >/dev/null 2>&1
+
+if [ -d "/sys/class/net/$dev/queues" ]; then
+	for q in /sys/class/net/$dev/queues/rx-*; do
+		[ -e "$q/rps_cpus" ] || continue
+		[ "$rps" = 1 ] && printf 'd\n' > "$q/rps_cpus" 2>/dev/null
+		[ "$rps" = 1 ] || printf '0\n' > "$q/rps_cpus" 2>/dev/null
+		if [ -e "$q/rps_flow_cnt" ]; then
+			[ "$rps" = 1 ] && [ "$rfs" = 1 ] && printf '4096\n' > "$q/rps_flow_cnt" 2>/dev/null
+			[ "$rps" = 1 ] && [ "$rfs" = 1 ] || printf '0\n' > "$q/rps_flow_cnt" 2>/dev/null
+		fi
+	done
+fi
+
+if [ -w /sys/kernel/debug/ppe/bind_rate ]; then
+	[ "$ppe" = 1 ] && printf '5 5\n' > /sys/kernel/debug/ppe/bind_rate 2>/dev/null
+	[ "$ppe" = 1 ] || printf '30 30\n' > /sys/kernel/debug/ppe/bind_rate 2>/dev/null
+fi
+
+exit 0

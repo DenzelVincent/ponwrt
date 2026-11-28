@@ -1,0 +1,4 @@
+config tuning 'tuning'
+	option rps_enabled '1'
+	option rfs_enabled '1'
+	option ppe_bind_rate_enabled '1'
