@@ -4,8 +4,8 @@ src-git routing https://github.com/openwrt/routing.git
 src-git telephony https://github.com/openwrt/telephony.git
 src-git video https://github.com/openwrt/video.git
 # pon 两个 feed 用 DenzelVincent fork（上游 pbs05 仍作为仓库内 upstream 远程）
-src-git pon_drivers https://github.com/DenzelVincent/openwrt-pon-drivers.git
-src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git
+src-git pon_drivers https://github.com/DenzelVincent/openwrt-pon-drivers.git;bugfix
+src-git pon_userspace https://github.com/DenzelVincent/openwrt-pon-userspace.git;bugfix
 # airoha-npu 自维护仓库，裸拉最新不锁 sha；仓库为 feed 形态（包体在子目录），根 Makefile 的旧提交已不可用
 src-git airoha_npu https://github.com/DenzelVincent/luci-app-airoha-npu.git
 #src-git targets https://github.com/openwrt/targets.git
